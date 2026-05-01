@@ -1,0 +1,161 @@
+# Island Survival Game - Project Brief
+
+## Context
+This is a Roblox Studio game project. The owner previously attempted to build this with Claude (web chat) but the result was not high quality - weapons didn't work properly, XP/weapons saving was wrong, the shotgun couldn't be purchased, and overall code quality was poor for a project of this scope. We need a proper, well-architected implementation similar to "99 Nights in the Forest" quality.
+
+The owner is a Roblox developer (UserID: 4373365238) but is not a professional Lua programmer, so the code needs to be production-ready, well-organized, and actually work without back-and-forth debugging.
+
+## Inspiration
+Game mechanics inspired by **"99 Nights in the Forest"** - a popular Roblox survival game where players board a vehicle, crash, and must survive in a hostile environment.
+
+## Game Concept
+Players board a plane in a lobby, the plane crashes onto a deserted island, and they must survive against dangerous animals while earning XP to upgrade their gear.
+
+## Detailed Requirements
+
+### Lobby System
+- Lobby is a separate area (elevated platform works fine)
+- Timer should NOT start automatically when joining
+- **Timer starts only when player(s) step on a specific "ready" platform**
+- 10 second countdown once triggered
+- Up to 5 players per round
+- Players in lobby see countdown clearly
+
+### Plane Sequence
+- After countdown, players are placed inside a plane model
+- Plane flies with smooth animation (across the sky)
+- Plane crashes onto the island with dramatic effect (explosion, smoke, etc.)
+- Players are ejected near the crash site with starting weapon
+
+### The Island
+- Same island every round (not procedural)
+- Large size (~500x500 studs minimum)
+- Varied terrain: beaches, forests with trees, rocks, mountains/hills
+- Should feel explorable and have hiding spots
+- Surrounded by water
+
+### Animal System (4 levels)
+| Level | Animal | HP   | Damage |
+|-------|--------|------|--------|
+| 1     | Dog    | 30   | 5      |
+| 2     | Wolf   | 60   | 10     |
+| 3     | Bear   | 120  | 20     |
+| 4     | Lion   | 200  | 35     |
+
+**AI Behavior:**
+- Animals are passive by default
+- They aggro and chase when player gets close (~30 studs)
+- Higher level animals appear more frequently as the round progresses
+- Animals should look distinct (different sizes, colors, simple but recognizable)
+
+### Weapon System
+| Weapon       | Level | Damage | Cooldown | Price       | Type   |
+|--------------|-------|--------|----------|-------------|--------|
+| Stick        | 1     | 10     | 1.0s     | Starter     | Melee  |
+| Spear        | 2     | 25     | 0.8s     | 100 XP      | Melee  |
+| Knife        | 3     | 50     | 0.5s     | 300 XP      | Melee  |
+| Pistol       | 4     | 100    | 0.4s     | 800 XP      | Ranged |
+| **Shotgun**  | 4     | 100    | 0.15s    | **20 Robux**| Ranged |
+
+**Damage Rules:**
+- Each weapon level is "designed" for the matching animal level
+- Weapons CAN damage higher-level animals but at reduced effectiveness (~30% damage)
+- Player should feel encouraged to upgrade weapons
+
+**IMPORTANT BUG FROM PREVIOUS ATTEMPT:** Weapons must actually deal damage when activated. The previous version had broken Tool.Activated handlers.
+
+### XP & Progression
+- Earn XP from:
+  - Time survived (e.g., +10 XP every 10 seconds)
+  - Killing animals (XP = animal level × 50)
+- XP is **session-only** - resets between rounds (DO NOT SAVE XP)
+- Weapons purchased with XP are **session-only** too (lost on death/round end)
+- Only Robux purchases persist (Shotgun, plane upgrades)
+
+### Plane Upgrades (XP-based)
+- **Speed**: 3 levels (50, 150, 400 XP)
+- **HP**: 3 levels (50, 150, 400 XP) - affects player max HP
+
+**IMPORTANT:** These should also be session-only OR clearly persistent - the owner mentioned XP shouldn't save but Robux purchases should. Plane upgrades bought with XP should also reset between rounds.
+
+### Shop GUI
+- Clean, modern design (not childish)
+- Hebrew text where appropriate (the owner is Israeli)
+- Sections: Weapons, Plane Upgrades
+- Shows: name, stats, price, owned/locked status
+- Buy button that actually works
+- **CRITICAL:** Shotgun purchase via Robux must trigger MarketplaceService:PromptProductPurchase correctly
+
+### Death & Revive
+- Player dies → game over for them (unless revive)
+- Revive option: **15 Robux, ONE TIME PER ROUND**
+- After revive, player respawns at safe spot
+- All players dead → game ends, return to lobby
+- No round time limit - survive as long as possible
+
+### Robux Products (already created by owner)
+```lua
+local REVIVE_PRODUCT_ID = 3584581312   -- 15 Robux, one-time revive
+local SHOTGUN_PRODUCT_ID = 3584585480  -- 20 Robux, permanent shotgun
+```
+
+These are Developer Products (consumable for revive, but shotgun grants permanent access).
+
+## What Was Wrong With Previous Implementation
+
+1. **Weapons didn't deal damage** - Tool.Activated handler had logic but the damage application to animals was broken
+2. **XP was being saved to DataStore** - it should NOT save
+3. **Owned weapons were being saved** - only Shotgun (Robux) and any persistent stuff should save
+4. **Shotgun purchase was broken** - the prompt didn't fire correctly
+5. **Timer started automatically** - should require stepping on a platform
+6. **General quality was low** - felt rushed, lots of bugs, unrealistic to a "99 Nights in the Forest" comparison
+7. **Animal AI was buggy** - they would sometimes not move or attack properly
+8. **No clear visual feedback** - no health bars on animals working consistently, no damage numbers, etc.
+
+## Quality Expectations
+
+This needs to feel like a real, polished Roblox game:
+- Smooth animations (plane flight, crash, animal movement)
+- Proper sound effects (animal sounds, weapon sounds, ambient)
+- Visual effects (blood/hit effects, muzzle flash for guns, explosion)
+- Clear UI with proper Hebrew + English support
+- Working save system (only for Robux purchases!)
+- Anti-exploit considerations (server-authoritative damage)
+- Multiple players syncing properly
+
+## Technical Notes
+
+- Use **server-authoritative** combat (client requests, server validates)
+- Use RemoteEvents/RemoteFunctions properly
+- DataStore for persistent data only (Robux purchases)
+- Avoid common pitfalls: race conditions on character spawn, tool replication issues
+- The owner has the Anti-Exploit script already set up, so don't worry about that part
+
+## Owner's UserIDs (admin/dev access)
+```lua
+4373365238
+9766152626
+```
+
+## Studio Settings Needed
+- Allow API Services (Studio Access to APIs)
+- Allow HTTP Requests (if any external calls)
+
+## Deliverables Needed
+
+1. **ServerScript** - main game logic, lobby, round management, animal AI
+2. **LocalScript** - all client GUIs (HUD, shop, inventory, lobby UI, revive prompt)
+3. **Optional ModuleScripts** - if helpful for organization (animal definitions, weapon definitions, map building)
+4. **Setup instructions** - clear steps to get it running
+
+## Final Notes for Claude Code
+
+The owner has been patient through multiple iterations and just wants something that **actually works well**. Take your time, structure the code properly, test the logic carefully (especially weapon damage and Robux purchases), and deliver something playable.
+
+If you need to make trade-offs, prioritize in this order:
+1. **It works** (no broken core features)
+2. **Code quality** (readable, maintainable)
+3. **Polish** (effects, sounds, visuals)
+4. **Extra features**
+
+Good luck! 🎮
