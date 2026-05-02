@@ -1,170 +1,159 @@
 -- DataManager.server.lua
--- Place in: ServerScriptService > Script named "DataManager"
+-- Place in: ServerScriptService as Script named "DataManager"
+-- Persistent player state. ONLY saves Robux purchases. XP, session weapons,
+-- and XP-bought upgrades are NEVER saved.
 
 local DataStoreService = game:GetService("DataStoreService")
-local Players = game:GetService("Players")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local Players          = game:GetService("Players")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
 
 local GameConfig = require(ReplicatedStorage:WaitForChild("GameConfig"))
 
-local dataStore = DataStoreService:GetDataStore(GameConfig.DATASTORE_NAME)
+local store = DataStoreService:GetDataStore(GameConfig.DataStoreName)
 
--- RemoteEvents for client-server communication
-local remotes = ReplicatedStorage:FindFirstChild("Remotes")
-if not remotes then
-	remotes = Instance.new("Folder")
-	remotes.Name = "Remotes"
-	remotes.Parent = ReplicatedStorage
+local DataManager = {}
+local persistent  = {}  -- [userId] = { OwnsShotgun = bool, Version = N }
+local session     = {}  -- [userId] = { XP=0, OwnedWeapons={Stick=true}, PlaneUpgrades={Speed=0,HP=0}, UsedRevive=false, Alive=false, CurrentWeapon="Stick", DeathCount=0 }
+
+local function blankPersistent()
+	return { OwnsShotgun = false, Version = GameConfig.DataStoreVersion }
 end
 
-local updateCashEvent = remotes:FindFirstChild("UpdateCash")
-if not updateCashEvent then
-	updateCashEvent = Instance.new("RemoteEvent")
-	updateCashEvent.Name = "UpdateCash"
-	updateCashEvent.Parent = remotes
-end
-
-local getCashFunction = remotes:FindFirstChild("GetCash")
-if not getCashFunction then
-	getCashFunction = Instance.new("RemoteFunction")
-	getCashFunction.Name = "GetCash"
-	getCashFunction.Parent = remotes
-end
-
--- In-memory player data
-local playerData = {}
-
-local function getDefaultData()
+local function blankSession()
 	return {
-		cash = GameConfig.STARTING_CASH,
-		ownedUpgrades = {},
-		ownedDroppers = {1}, -- Start with basic dropper unlocked
+		XP             = 0,
+		OwnedWeapons   = { Stick = true },
+		PlaneUpgrades  = { Speed = 0, HP = 0 },
+		UsedRevive     = false,
+		Alive          = false,
+		CurrentWeapon  = "Stick",
+		DeathCount     = 0,
 	}
 end
 
-local function loadData(player)
-	local success, data = pcall(function()
-		return dataStore:GetAsync("player_" .. player.UserId)
+-- ====== Persistent (DataStore) ======
+function DataManager.Load(player)
+	local key = "p_" .. player.UserId
+	local data
+	local ok, err = pcall(function()
+		data = store:GetAsync(key)
 	end)
-
-	if success and data then
-		playerData[player.UserId] = data
+	if not ok then
+		warn("[DataManager] GetAsync failed for", player.Name, err)
+		data = nil
+	end
+	if type(data) ~= "table" then
+		data = blankPersistent()
 	else
-		playerData[player.UserId] = getDefaultData()
-		if not success then
-			warn("Failed to load data for " .. player.Name .. ": " .. tostring(data))
+		-- merge with defaults so missing fields are filled in
+		local fresh = blankPersistent()
+		for k, v in pairs(fresh) do
+			if data[k] == nil then data[k] = v end
 		end
 	end
-
-	-- Notify client of starting cash
-	updateCashEvent:FireClient(player, playerData[player.UserId].cash)
+	persistent[player.UserId] = data
+	return data
 end
 
-local function saveData(player)
-	if not playerData[player.UserId] then return end
-
-	local success, err = pcall(function()
-		dataStore:SetAsync("player_" .. player.UserId, playerData[player.UserId])
-	end)
-
-	if not success then
-		warn("Failed to save data for " .. player.Name .. ": " .. tostring(err))
-	end
-end
-
--- Public API
-local DataManager = {}
-
-function DataManager.GetCash(player)
-	local data = playerData[player.UserId]
-	return data and data.cash or 0
-end
-
-function DataManager.AddCash(player, amount)
-	local data = playerData[player.UserId]
-	if not data then return end
-	data.cash = data.cash + amount
-	updateCashEvent:FireClient(player, data.cash)
-end
-
-function DataManager.SpendCash(player, amount)
-	local data = playerData[player.UserId]
+function DataManager.Save(player)
+	local data = persistent[player.UserId]
 	if not data then return false end
-	if data.cash < amount then return false end
-	data.cash = data.cash - amount
-	updateCashEvent:FireClient(player, data.cash)
+	local key = "p_" .. player.UserId
+	local ok, err = pcall(function()
+		store:SetAsync(key, data)
+	end)
+	if not ok then
+		warn("[DataManager] SetAsync failed for", player.Name, err)
+		return false
+	end
 	return true
 end
 
-function DataManager.HasUpgrade(player, upgradeId)
-	local data = playerData[player.UserId]
-	if not data then return false end
-	for _, id in ipairs(data.ownedUpgrades) do
-		if id == upgradeId then return true end
+function DataManager.GetPersistent(player)
+	return persistent[player.UserId]
+end
+
+function DataManager.SetOwnsShotgun(player, owns)
+	local d = persistent[player.UserId]
+	if not d then return false end
+	d.OwnsShotgun = owns and true or false
+	return DataManager.Save(player)
+end
+
+function DataManager.OwnsShotgun(player)
+	local d = persistent[player.UserId]
+	return d and d.OwnsShotgun or false
+end
+
+-- ====== Session (in-memory only) ======
+function DataManager.GetSession(player)
+	local s = session[player.UserId]
+	if not s then
+		s = blankSession()
+		session[player.UserId] = s
 	end
-	return false
-end
-
-function DataManager.AddUpgrade(player, upgradeId)
-	local data = playerData[player.UserId]
-	if not data then return end
-	table.insert(data.ownedUpgrades, upgradeId)
-end
-
-function DataManager.HasDropper(player, dropperIndex)
-	local data = playerData[player.UserId]
-	if not data then return false end
-	for _, idx in ipairs(data.ownedDroppers) do
-		if idx == dropperIndex then return true end
+	-- Shotgun ownership reflects into session (but not "save it back to DataStore")
+	if DataManager.OwnsShotgun(player) then
+		s.OwnedWeapons.Shotgun = true
 	end
-	return false
+	return s
 end
 
-function DataManager.AddDropper(player, dropperIndex)
-	local data = playerData[player.UserId]
-	if not data then return end
-	table.insert(data.ownedDroppers, dropperIndex)
-end
-
-function DataManager.GetOwnedDroppers(player)
-	local data = playerData[player.UserId]
-	return data and data.ownedDroppers or {1}
-end
-
--- RemoteFunction handler
-getCashFunction.OnServerInvoke = function(player)
-	return DataManager.GetCash(player)
-end
-
--- Player lifecycle
-Players.PlayerAdded:Connect(function(player)
-	loadData(player)
-end)
-
-Players.PlayerRemoving:Connect(function(player)
-	saveData(player)
-	playerData[player.UserId] = nil
-end)
-
--- Auto-save every 60 seconds
-game:GetService("RunService").Heartbeat:Connect(function()
-end)
-
-task.spawn(function()
-	while true do
-		task.wait(60)
-		for _, player in ipairs(Players:GetPlayers()) do
-			saveData(player)
-		end
+function DataManager.ResetSession(player)
+	session[player.UserId] = blankSession()
+	if DataManager.OwnsShotgun(player) then
+		session[player.UserId].OwnedWeapons.Shotgun = true
 	end
-end)
+end
 
--- Save on server close
+function DataManager.AddXP(player, amount)
+	local s = DataManager.GetSession(player)
+	s.XP = math.max(0, s.XP + amount)
+	return s.XP
+end
+
+function DataManager.SpendXP(player, amount)
+	local s = DataManager.GetSession(player)
+	if s.XP < amount then return false end
+	s.XP = s.XP - amount
+	return true
+end
+
+function DataManager.GrantSessionWeapon(player, weaponId)
+	local s = DataManager.GetSession(player)
+	s.OwnedWeapons[weaponId] = true
+end
+
+function DataManager.OwnsWeapon(player, weaponId)
+	local s = DataManager.GetSession(player)
+	return s.OwnedWeapons[weaponId] == true
+end
+
+-- ====== Lifecycle ======
+local function onJoin(player)
+	DataManager.Load(player)
+	session[player.UserId] = blankSession()
+	if DataManager.OwnsShotgun(player) then
+		session[player.UserId].OwnedWeapons.Shotgun = true
+	end
+end
+
+local function onLeave(player)
+	DataManager.Save(player)
+	persistent[player.UserId] = nil
+	session[player.UserId]    = nil
+end
+
+Players.PlayerAdded:Connect(onJoin)
+Players.PlayerRemoving:Connect(onLeave)
+for _, p in ipairs(Players:GetPlayers()) do task.spawn(onJoin, p) end
+
 game:BindToClose(function()
-	for _, player in ipairs(Players:GetPlayers()) do
-		saveData(player)
+	for _, p in ipairs(Players:GetPlayers()) do
+		pcall(DataManager.Save, p)
 	end
+	task.wait(2)
 end)
 
--- Make DataManager accessible to other scripts
 _G.DataManager = DataManager
+print("[DataManager] Ready.")

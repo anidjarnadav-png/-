@@ -1,120 +1,213 @@
-# Roblox Tycoon Game
+# Island Survival - משחק רובלוקס
 
-משחק Tycoon מלא לרובלוקס עם 5 דרופרים, 4 שדרוגים, שמירת נתונים ו-UI.
-
----
-
-## הוראות הגדרה ב-Roblox Studio
-
-### שלב 1 - פתח Roblox Studio
-1. פתח **Roblox Studio**
-2. לחץ **New > Baseplate** (או כל template ריק)
-3. שמור את הפרויקט בשם **"MyTycoon"**
+משחק שרידה לרובלוקס בהשראת **"99 Nights in the Forest"**. שחקנים מתאספים בלובי, עולים על מטוס, מתרסקים על אי בודד, ושורדים נגד חיות מסוכנות תוך שדרוג נשקים וצבירת ניסיון.
 
 ---
 
-### שלב 2 - הכנס את הסקריפטים
+## הדרך המהירה להתקנה (מומלץ)
 
-#### ReplicatedStorage
-1. ב-Explorer, לחץ ימני על **ReplicatedStorage**
-2. בחר **Insert Object > ModuleScript**
-3. שנה שם ל- `GameConfig`
-4. מחק את הקוד הקיים והדבק את תוכן `ReplicatedStorage/GameConfig.lua`
+### שלב 1 - הכינו את הסטודיו
+1. פתחו את **Roblox Studio**
+2. **File &rarr; New** ובחרו **Baseplate** (או כל מקום ריק אחר)
+3. שמרו את המקום (`Ctrl+S`) בשם `IslandSurvival`
+4. **File &rarr; Game Settings &rarr; Security**: הפעילו **Allow API Services** (חובה לשמירה ולקנייה ב-Robux)
 
-#### ServerScriptService - DataManager
-1. לחץ ימני על **ServerScriptService**
-2. בחר **Insert Object > Script**
-3. שנה שם ל- `DataManager`
-4. הדבק את תוכן `ServerScriptService/DataManager.server.lua`
+### שלב 2 - הריצו את ההתקנה האוטומטית
+1. **View &rarr; Command Bar** (פתחו את ה-Command Bar בתחתית המסך)
+2. פתחו את הקובץ `IslandSurvivalInstaller.lua` במחשב שלכם, בחרו הכל (`Ctrl+A`) והעתיקו (`Ctrl+C`)
+3. הדביקו (`Ctrl+V`) את הסקריפט כולו ב-Command Bar והקישו **Enter**
+4. בחלון ה-Output אמורה להופיע ההודעה:
+   ```
+   [Install] Island Survival installed successfully
+   ```
 
-#### ServerScriptService - PlotManager
-1. לחץ ימני על **ServerScriptService**
-2. בחר **Insert Object > Script**
-3. שנה שם ל- `PlotManager`
-4. הדבק את תוכן `ServerScriptService/PlotManager.server.lua`
-
-#### ServerScriptService - MainGame
-1. לחץ ימני על **ServerScriptService**
-2. בחר **Insert Object > Script**
-3. שנה שם ל- `MainGame`
-4. הדבק את תוכן `ServerScriptService/MainGame.server.lua`
-
-#### StarterGui - CashGui
-1. לחץ ימני על **StarterGui**
-2. בחר **Insert Object > LocalScript**
-3. שנה שם ל- `CashGui`
-4. הדבק את תוכן `StarterGui/CashGui.lua`
-
-#### StarterPlayerScripts - TycoonClient
-1. לחץ ימני על **StarterPlayerScripts**
-2. בחר **Insert Object > LocalScript**
-3. שנה שם ל- `TycoonClient`
-4. הדבק את תוכן `StarterPlayerScripts/LocalScript.client.lua`
+### שלב 3 - הפעילו ושחקו
+1. לחצו **Play** (F5) או על כפתור ההפעלה
+2. השחקן יתחיל בלובי המרחף מעל האי
+3. עלו על הפלטפורמה הכתומה כדי להפעיל ספירה לאחור של 10 שניות
+4. אחרי הספירה - מתבצעת אנימציית טיסה והתרסקות על האי
+5. הילחמו בחיות, אספו XP, ושדרגו נשקים בחנות (לחצו `B`)
 
 ---
 
-### שלב 3 - הפעל את המשחק
+## אופציה ידנית - להעתקה קובץ-קובץ
 
-1. לחץ על כפתור **Play** (▶) ב-Roblox Studio
-2. השחקן יתחיל על אחת מ-4 החלקות
-3. הליכה על הכפתורים הכתומים = קניית Droppers
-4. הליכה על הכפתורים הכחולים = קניית שדרוגים
-5. הכדורים הירוקים עוברים לכיוון ה-Collector ומוסיפים כסף
-
----
-
-## מבנה המשחק
+אם אתם מעדיפים לראות כל קובץ בנפרד (לדוגמה, כדי לערוך הגדרות), הקבצים נמצאים בריפו במבנה הבא:
 
 ```
 ReplicatedStorage/
-├── GameConfig (ModuleScript)    - הגדרות מחירים ומהירויות
-└── Remotes/ (נוצר אוטומטית)
-    ├── UpdateCash (RemoteEvent)
-    ├── GetCash (RemoteFunction)
-    ├── BuyDropper (RemoteEvent)
-    ├── BuyUpgrade (RemoteEvent)
-    └── Notify (RemoteEvent)
+  GameConfig.lua            (ModuleScript) - מספרים והגדרות
+  Strings.lua               (ModuleScript) - מחרוזות עברית
+  WeaponConfig.lua          (ModuleScript) - הגדרות נשקים
+  AnimalConfig.lua          (ModuleScript) - הגדרות חיות
 
 ServerScriptService/
-├── DataManager (Script)         - שמירה/טעינה של כסף
-├── PlotManager (Script)         - ניהול חלקות שחקנים
-└── MainGame (Script)            - לוגיקה ראשית
+  DataManager.server.lua    (Script) - שמירה לפרסיסטנט (Robux בלבד)
+  IslandBuilder.server.lua  (Script) - בניית האי, לובי, מים
+  RoundManager.server.lua   (Script) - ניהול סבבים
+  LobbyManager.server.lua   (Script) - זיהוי שחקנים על הפלטפורמה
+  PlaneManager.server.lua   (Script) - מטוס + טיסה + התרסקות
+  AnimalManager.server.lua  (Script) - ספאון ו-AI לחיות
+  CombatManager.server.lua  (Script) - אימות נזק בצד שרת
+  ShopManager.server.lua    (Script) - לוגיקת רכישות
+  ProductHandler.server.lua (Script) - עיבוד רכישות Robux
+  Main.server.lua           (Script) - אתחול ויצירת Remotes
 
 StarterGui/
-└── CashGui (LocalScript)        - הצגת כסף + התראות
+  HUDGui.lua                (LocalScript) - HP, XP, נשק, זמן
+  LobbyGui.lua              (LocalScript) - באנר ספירה לאחור
+  ShopGui.lua               (LocalScript) - חנות נשקים ושדרוגים
+  DeathGui.lua              (LocalScript) - מסך מוות + החייאה
+  NotificationGui.lua       (LocalScript) - הודעות צפות
 
 StarterPlayerScripts/
-└── TycoonClient (LocalScript)   - אפקטי קרבה לכפתורים
+  ClientCombat.lua          (LocalScript) - שליחת בקשות התקפה
+  EffectsClient.lua         (LocalScript) - מספרי נזק, אפקטים
+  CameraClient.lua          (LocalScript) - רעידת מצלמה
 ```
 
----
-
-## הדרופרים
-
-| שם | כסף לדרופ | מהירות | מחיר |
-|---|---|---|---|
-| Basic Dropper | $1 | 2 שניות | חינם |
-| Silver Dropper | $5 | 2 שניות | $100 |
-| Gold Dropper | $15 | 1.5 שניות | $500 |
-| Diamond Dropper | $50 | 1 שנייה | $2,000 |
-| Rainbow Dropper | $200 | 0.8 שניות | $10,000 |
-
-## השדרוגים
-
-| שם | אפקט | מחיר |
-|---|---|---|
-| Upgrade 1 | x2 הכנסה | $250 |
-| Upgrade 2 | x3 הכנסה | $1,500 |
-| Upgrade 3 | x5 הכנסה | $8,000 |
-| Upgrade 4 | x10 הכנסה | $50,000 |
+צרו את הסקריפטים ידנית ב-Studio במקומות הללו, והעתיקו את התוכן של כל קובץ פנימה.
 
 ---
 
-## שינוי הגדרות
+## בקרות ושליטה
 
-כל ההגדרות נמצאות ב-`GameConfig` (ReplicatedStorage). שם ניתן לשנות:
-- מחירי שדרוגים ודרופרים
-- כמות כסף לדרופ
-- מהירות הדרופרים
-- מספר החלקות (NUM_PLOTS)
-- שם מסד הנתונים (DATASTORE_NAME)
+| מקש | פעולה |
+|------|--------|
+| `WASD` | תנועה |
+| `Space` | קפיצה |
+| `1` / `2` / `3` ... | החלפת נשקים מה-Backpack |
+| לחיצה שמאלית | התקפה (כשמחזיקים נשק) |
+| `B` | פתיחה/סגירה של החנות |
+| `Esc` | סגירת חנות |
+
+---
+
+## מערכות המשחק
+
+### חיות (4 רמות)
+| רמה | חיה | HP | נזק | מהירות | XP |
+|-----|------|-----|-----|--------|-----|
+| 1 | כלב | 30 | 5 | 14 | 50 |
+| 2 | זאב | 60 | 10 | 16 | 100 |
+| 3 | דוב | 120 | 20 | 12 | 150 |
+| 4 | אריה | 200 | 35 | 18 | 200 |
+
+חיות תוקפות רק כשהשחקן בטווח אגרו (~30 studs). ככל שהסבב מתקדם, חיות מרמות גבוהות יותר מתחילות להופיע יותר ויותר.
+
+### נשקים (5 סוגים)
+| נשק | רמה | נזק | קצב | טווח | מחיר |
+|------|------|-----|------|------|------|
+| מקל | 1 | 10 | 1.0 שנ' | 8 | חינם (התחלה) |
+| חנית | 2 | 25 | 0.8 שנ' | 10 | 100 XP |
+| סכין | 3 | 50 | 0.5 שנ' | 6 | 300 XP |
+| אקדח | 4 | 100 | 0.4 שנ' | 80 | 800 XP |
+| **רובה ציד** | 4 | 100 | 0.15 שנ' | 50 | **20 Robux (קבוע)** |
+
+נשק שמותאם לרמה של החיה גורם נזק מלא. נשק ברמה נמוכה יותר גורם רק 30% נזק.
+
+### שדרוגי טיסה (XP - מתאפסים בין סבבים)
+- **מהירות** - 3 רמות (50 / 150 / 400 XP) - מכפיל את WalkSpeed
+- **בריאות** - 3 רמות (50 / 150 / 400 XP) - מגדיל את HP מקסימלי
+
+### XP - איך מרוויחים?
+- **+1 XP** לשנייה של שרידה
+- **רמה x 50 XP** על הריגת חיה (לדוגמה: דוב = 150 XP)
+- **XP מתאפס בכל סבב** - לא נשמר!
+
+### החייאה (Robux)
+- אחרי מוות, כפתור "החייאה - 15 Robux"
+- ניתן להשתמש **פעם אחת בלבד בכל סבב**
+- אחרי החייאה השחקן מתחיל מאזור ההתרסקות עם נשק התחלתי
+
+---
+
+## שמירת נתונים (DataStore)
+
+המשחק שומר **רק רכישות Robux**. שאר הנתונים (XP, נשקים שנקנו ב-XP, שדרוגי טיסה) הם **לסבב הנוכחי בלבד**.
+
+| נתון | נשמר? |
+|------|---------|
+| XP | לא |
+| נשקים מ-XP | לא |
+| שדרוגי טיסה | לא |
+| **רובה ציד (Robux)** | כן |
+
+זאת בכוונה - המטרה היא שכל סבב יתחיל מאפס. רק רכישות אמיתיות בכסף נשמרות.
+
+---
+
+## Robux Product IDs
+
+המשחק משתמש ב-Developer Products הקיימים:
+```lua
+REVIVE_PRODUCT_ID  = 3584581312  -- 15 Robux, חד-פעמי בסבב
+SHOTGUN_PRODUCT_ID = 3584585480  -- 20 Robux, פתיחה לצמיתות
+```
+
+ה-IDs הללו מוגדרים ב-`ReplicatedStorage/GameConfig.lua` תחת `GameConfig.Products`. אם אתם רוצים להחליף ל-Developer Products משלכם, ערכו את הערכים שם.
+
+---
+
+## איך לשנות הגדרות
+
+הכל מרוכז ב-**`ReplicatedStorage/GameConfig.lua`** - מספרים, מחירים, מהירויות, גודל אי, וכו'. ניתן לערוך מ-Studio בלי להפעיל מחדש את המשחק.
+
+מחרוזות עברית (כפתורים, התראות, הודעות) - **`ReplicatedStorage/Strings.lua`**.
+
+---
+
+## ארכיטקטורה (לסקרנים)
+
+המשחק בנוי לפי עקרונות **server-authoritative**:
+1. הלקוח שולח בקשת התקפה: `Tool.Activated &rarr; Remotes.RequestAttack:FireServer({target = animal})`
+2. השרת (`CombatManager`) מאמת:
+   - השחקן מחזיק את הנשק (`Backpack`/`Character` חיפוש)
+   - מרחק קטן מטווח הנשק
+   - עברה דקת ה-cooldown מהפגיעה הקודמת
+   - הקורבן עדיין בחיים
+3. אם הכל תקין, השרת מחיל נזק ושולח אירוע ויזואלי לכל הלקוחות.
+
+זה פותר את הבאג מהגרסה הקודמת שבה ההתקפות לא עבדו - שום נזק לא מבוצע ללא אישור שרת.
+
+---
+
+## פתרון בעיות
+
+**"השחקן מתחיל ובלובי, אבל הספירה לא מתחילה"**
+- ודאו שאתם עומדים על הפלטפורמה הכתומה (Ready Pad) במרכז הלובי
+- צריכה להיות לפחות שחקן אחד על הפלטפורמה
+- אם תרדו, הספירה מתבטלת
+
+**"אחרי לחיצה על נשק לא קורה כלום"**
+- ודאו שאתם **מחזיקים** את הנשק (לא רק שהוא ב-Backpack). חיצוני - יש את שם הנשק על המסך מתחת
+- ודאו שיש חיה בטווח ובכיוון הראייה שלכם
+- ה-cooldown של נשקים שונה - מקל זה שנייה שלמה בין מכות
+
+**"רובה הציד לא נקנה"**
+- ודאו ש-**Allow API Services** מופעל (Game Settings &rarr; Security)
+- ודאו שה-Developer Product ID נכון (`3584585480`) - או החליפו ל-ID משלכם
+- צריכה להיות לכם יתרת Robux בחשבון
+
+**"השמירה לא עובדת"**
+- שוב, **Allow API Services** מופעל?
+- בדקו את ה-Output ב-Studio - אם יש שגיאה של DataStore, היא תופיע שם
+
+**"החיות לא תוקפות"**
+- ודאו שאתם בטווח אגרו (~30 studs)
+- ודאו שאתם בסטטוס PLAYING (אחרי ההתרסקות)
+
+---
+
+## פיתוח עתידי (לא בגרסה הזו)
+
+- מוזיקת רקע ואפקטי קול עשירים
+- מערכת רעב/צמא
+- בנייה ועיצוב מקלט
+- מצב ערב/בוקר דינמי
+- Boss battles
+- Leaderboards
+
+---
+
+**בהצלחה ושחק חכם!** 🏝️
