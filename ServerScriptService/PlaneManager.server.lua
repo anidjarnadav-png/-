@@ -33,151 +33,165 @@ local function buildPlaneModel()
 	local model = Instance.new("Model")
 	model.Name = "CrashPlane"
 
-	local body = GameConfig.Plane.BodyColor
-	local accent = GameConfig.Plane.WingColor
-	local trim = Color3.fromRGB(160, 50, 50)
+	local bodyColor = GameConfig.Plane.BodyColor
+	local accent    = GameConfig.Plane.WingColor
+	local trim      = Color3.fromRGB(160, 50, 50)
+	local glassCol  = Color3.fromRGB(120, 180, 220)
 
-	-- Fuselage: rounded cylinder lying flat
+	-- Roblox convention: a Part's "front" is its -Z axis (LookVector).
+	-- We build the plane with its NOSE at -Z so CFrame.new(start, end)
+	-- points the nose toward the destination. Everything in this builder is
+	-- a Block shape (or Ball) for predictable orientation.
+
+	-- Fuselage: long box centered at origin, length along Z (28 long, 5x5).
 	local fuselage = makePart{
-		Name="Fuselage",
-		Shape=Enum.PartType.Cylinder,
-		Size=Vector3.new(28, 5, 5),
-		CFrame=CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, math.rad(90)),
-		Color=body, Material=Enum.Material.Metal,
-		Parent=model,
-	}
-	-- Nose cone
-	local nose = makePart{
-		Name="Nose",
-		Shape=Enum.PartType.Ball,
-		Size=Vector3.new(5, 5, 5),
-		CFrame=CFrame.new(0, 0, -14),
-		Color=body, Material=Enum.Material.Metal,
-		Parent=model,
-	}
-	-- Trim stripe along the side
-	local stripe = makePart{
-		Name="Stripe", Size=Vector3.new(6, 1, 28),
-		CFrame=CFrame.new(0, 0.6, 0),
-		Color=trim, Material=Enum.Material.SmoothPlastic,
-		Parent=model,
-	}
-	-- Cockpit canopy (glass)
-	local canopy = makePart{
-		Name="Canopy",
-		Shape=Enum.PartType.Cylinder,
-		Size=Vector3.new(6, 4, 4.6),
-		CFrame=CFrame.new(0, 2, -8) * CFrame.Angles(0, 0, math.rad(90)),
-		Color=Color3.fromRGB(120, 180, 220),
-		Material=Enum.Material.Glass,
-		Transparency=0.4,
-		Reflectance=0.3,
-		Parent=model,
-	}
-	-- Cockpit window divider
-	local divider = makePart{
-		Name="Divider", Size=Vector3.new(0.4, 4.2, 6.2),
-		CFrame=CFrame.new(0, 2, -8),
-		Color=Color3.fromRGB(60, 60, 70), Material=Enum.Material.Metal,
-		Parent=model,
+		Name = "Fuselage",
+		Size = Vector3.new(5, 5, 28),
+		CFrame = CFrame.new(0, 0, 0),
+		Color = bodyColor, Material = Enum.Material.Metal,
+		Parent = model,
 	}
 
-	-- Wings (swept slightly back) — main wing
-	local wingL = makePart{
-		Name="WingL", Size=Vector3.new(14, 0.7, 5),
-		CFrame=CFrame.new(-9, 0.2, 1) * CFrame.Angles(0, math.rad(8), 0),
-		Color=accent, Material=Enum.Material.Metal,
-		Parent=model,
+	-- Nose at -Z (front).
+	makePart{
+		Name = "Nose", Shape = Enum.PartType.Ball,
+		Size = Vector3.new(5, 5, 5),
+		CFrame = CFrame.new(0, 0, -14),
+		Color = bodyColor, Material = Enum.Material.Metal,
+		Parent = model,
 	}
-	local wingR = makePart{
-		Name="WingR", Size=Vector3.new(14, 0.7, 5),
-		CFrame=CFrame.new( 9, 0.2, 1) * CFrame.Angles(0, math.rad(-8), 0),
-		Color=accent, Material=Enum.Material.Metal,
-		Parent=model,
-	}
-	-- Winglets at wing tips
-	local wingletL = makePart{
-		Name="WingletL", Size=Vector3.new(0.6, 2.5, 3),
-		CFrame=CFrame.new(-15.5, 1.4, 1.5),
-		Color=trim, Material=Enum.Material.Metal,
-		Parent=model,
-	}
-	local wingletR = makePart{
-		Name="WingletR", Size=Vector3.new(0.6, 2.5, 3),
-		CFrame=CFrame.new( 15.5, 1.4, 1.5),
-		Color=trim, Material=Enum.Material.Metal,
-		Parent=model,
+	-- Rear cap at +Z (tail).
+	makePart{
+		Name = "TailCap", Shape = Enum.PartType.Ball,
+		Size = Vector3.new(4.5, 4.5, 4),
+		CFrame = CFrame.new(0, 0, 14),
+		Color = bodyColor, Material = Enum.Material.Metal,
+		Parent = model,
 	}
 
-	-- Engines on wings (cylinders) with propellers
+	-- Trim stripes along both sides.
+	makePart{
+		Name = "StripeL", Size = Vector3.new(0.3, 1, 28),
+		CFrame = CFrame.new(-2.55, 0.5, 0),
+		Color = trim, Material = Enum.Material.SmoothPlastic, Parent = model,
+	}
+	makePart{
+		Name = "StripeR", Size = Vector3.new(0.3, 1, 28),
+		CFrame = CFrame.new(2.55, 0.5, 0),
+		Color = trim, Material = Enum.Material.SmoothPlastic, Parent = model,
+	}
+
+	-- Cockpit windows on top of fuselage near the nose (z negative).
+	makePart{
+		Name = "CanopyL", Size = Vector3.new(0.3, 2.4, 7),
+		CFrame = CFrame.new(-1.7, 2.6, -7),
+		Color = glassCol, Material = Enum.Material.Glass,
+		Transparency = 0.35, Reflectance = 0.3, Parent = model,
+	}
+	makePart{
+		Name = "CanopyR", Size = Vector3.new(0.3, 2.4, 7),
+		CFrame = CFrame.new(1.7, 2.6, -7),
+		Color = glassCol, Material = Enum.Material.Glass,
+		Transparency = 0.35, Reflectance = 0.3, Parent = model,
+	}
+	makePart{
+		Name = "CanopyTop", Size = Vector3.new(3.4, 0.4, 7),
+		CFrame = CFrame.new(0, 3.7, -7),
+		Color = glassCol, Material = Enum.Material.Glass,
+		Transparency = 0.35, Reflectance = 0.3, Parent = model,
+	}
+	-- Forward windshield (slanted slightly).
+	makePart{
+		Name = "Windshield", Size = Vector3.new(3.4, 2.6, 0.3),
+		CFrame = CFrame.new(0, 2.4, -10.5) * CFrame.Angles(math.rad(-15), 0, 0),
+		Color = glassCol, Material = Enum.Material.Glass,
+		Transparency = 0.35, Reflectance = 0.3, Parent = model,
+	}
+
+	-- Main wing — single block across both sides, slightly behind cockpit.
+	makePart{
+		Name = "Wing", Size = Vector3.new(30, 0.8, 5),
+		CFrame = CFrame.new(0, 0.4, 1),
+		Color = accent, Material = Enum.Material.Metal,
+		Parent = model,
+	}
+	-- Winglets at wing tips.
+	makePart{
+		Name = "WingletL", Size = Vector3.new(0.7, 2.6, 3),
+		CFrame = CFrame.new(-14.6, 1.7, 1),
+		Color = trim, Material = Enum.Material.Metal, Parent = model,
+	}
+	makePart{
+		Name = "WingletR", Size = Vector3.new(0.7, 2.6, 3),
+		CFrame = CFrame.new(14.6, 1.7, 1),
+		Color = trim, Material = Enum.Material.Metal, Parent = model,
+	}
+
+	-- Two underwing engines with propellers IN FRONT (more negative Z).
 	local function buildEngine(side)
-		local engine = makePart{
-			Name="Engine",
-			Shape=Enum.PartType.Cylinder,
-			Size=Vector3.new(5, 2, 2),
-			CFrame=CFrame.new(side * 6, -0.6, -1) * CFrame.Angles(0, 0, math.rad(90)),
-			Color=Color3.fromRGB(60, 60, 70), Material=Enum.Material.Metal,
-			Parent=model,
+		makePart{
+			Name = "Engine", Size = Vector3.new(2, 2, 5),
+			CFrame = CFrame.new(side * 7, -0.8, -1),
+			Color = Color3.fromRGB(60, 60, 70),
+			Material = Enum.Material.Metal, Parent = model,
 		}
-		-- Propeller (3-blade) — anchored disc that we'll spin via tween or while loop
-		local prop = makePart{
-			Name="Propeller",
-			Shape=Enum.PartType.Cylinder,
-			Size=Vector3.new(0.3, 4, 0.4),
-			CFrame=CFrame.new(side * 6, -0.6, -3.6) * CFrame.Angles(0, 0, 0),
-			Color=Color3.fromRGB(20, 20, 22), Material=Enum.Material.Metal,
-			Parent=model,
+		makePart{
+			Name = "PropHub", Shape = Enum.PartType.Ball,
+			Size = Vector3.new(1.2, 1.2, 1.2),
+			CFrame = CFrame.new(side * 7, -0.8, -4),
+			Color = trim, Material = Enum.Material.Metal, Parent = model,
 		}
-		prop:SetAttribute("IsProp", true)
-		-- Spinner cone
-		local spinner = makePart{
-			Name="Spinner", Shape=Enum.PartType.Ball,
-			Size=Vector3.new(1.2, 1.2, 1.2),
-			CFrame=CFrame.new(side * 6, -0.6, -3.8),
-			Color=trim, Material=Enum.Material.Metal,
-			Parent=model,
+		-- Two crossed prop blades (vertical + horizontal).
+		makePart{
+			Name = "PropBlade1", Size = Vector3.new(0.3, 5, 0.4),
+			CFrame = CFrame.new(side * 7, -0.8, -4.1),
+			Color = Color3.fromRGB(30, 30, 35),
+			Material = Enum.Material.Metal, Parent = model,
 		}
-		return prop
+		makePart{
+			Name = "PropBlade2", Size = Vector3.new(5, 0.3, 0.4),
+			CFrame = CFrame.new(side * 7, -0.8, -4.1),
+			Color = Color3.fromRGB(30, 30, 35),
+			Material = Enum.Material.Metal, Parent = model,
+		}
 	end
-	local propL = buildEngine(-1)
-	local propR = buildEngine( 1)
+	buildEngine(-1)
+	buildEngine(1)
 
-	-- Tail section
-	local tailFin = makePart{
-		Name="TailFin", Size=Vector3.new(0.6, 5, 5),
-		CFrame=CFrame.new(0, 3, 12),
-		Color=accent, Material=Enum.Material.Metal,
-		Parent=model,
+	-- Tail vertical fin (rises up at the back, +Z).
+	makePart{
+		Name = "TailFin", Size = Vector3.new(0.6, 5, 5),
+		CFrame = CFrame.new(0, 3, 11.5),
+		Color = accent, Material = Enum.Material.Metal, Parent = model,
 	}
-	local hStab = makePart{
-		Name="HorizStab", Size=Vector3.new(8, 0.5, 3),
-		CFrame=CFrame.new(0, 1.5, 13),
-		Color=accent, Material=Enum.Material.Metal,
-		Parent=model,
+	-- Tail horizontal stabilizer.
+	makePart{
+		Name = "HorizStab", Size = Vector3.new(9, 0.5, 3),
+		CFrame = CFrame.new(0, 1.5, 12),
+		Color = accent, Material = Enum.Material.Metal, Parent = model,
 	}
-	local tailTrim = makePart{
-		Name="TailTrim", Size=Vector3.new(0.7, 1, 5),
-		CFrame=CFrame.new(0, 5.2, 12),
-		Color=trim, Material=Enum.Material.SmoothPlastic,
-		Parent=model,
-	}
-
-	-- Door (left side, rear)
-	local door = makePart{
-		Name="Door", Size=Vector3.new(0.3, 3.5, 2),
-		CFrame=CFrame.new(-2.6, 0.2, 4),
-		Color=trim, Material=Enum.Material.Metal,
-		Parent=model,
+	-- Tip of fin (red trim).
+	makePart{
+		Name = "TailTip", Size = Vector3.new(0.7, 1, 4),
+		CFrame = CFrame.new(0, 5.2, 11.8),
+		Color = trim, Material = Enum.Material.SmoothPlastic, Parent = model,
 	}
 
-	-- Weld everything to fuselage so the model moves as one when we tween.
+	-- Side door (left fuselage, mid-section).
+	makePart{
+		Name = "Door", Size = Vector3.new(0.3, 3.5, 2.5),
+		CFrame = CFrame.new(-2.6, 0.3, 4),
+		Color = trim, Material = Enum.Material.Metal, Parent = model,
+	}
+
+	-- Weld everything to fuselage and finalize physics flags.
 	for _, p in ipairs(model:GetChildren()) do
-		if p ~= fuselage and p:IsA("BasePart") then
-			weldTo(p, fuselage)
-		end
 		if p:IsA("BasePart") then
 			p.Anchored = true
 			p.CanCollide = false
+			if p ~= fuselage then
+				weldTo(p, fuselage)
+			end
 		end
 	end
 
@@ -187,12 +201,14 @@ end
 
 local function seatPlayers(model, players)
 	local body = model.PrimaryPart
+	-- Seats are in cockpit-and-cabin area. Nose is at -Z so seats with
+	-- negative Z are forward, positive Z are aft.
 	local seatPositions = {
-		Vector3.new(-2, 2.5, -4),
-		Vector3.new( 2, 2.5, -4),
-		Vector3.new(-2, 2.5,  2),
-		Vector3.new( 2, 2.5,  2),
-		Vector3.new( 0, 2.5,  6),
+		Vector3.new(-2, 2.0, -7),  -- pilot
+		Vector3.new( 2, 2.0, -7),  -- co-pilot
+		Vector3.new(-2, 2.0, -1),  -- mid left
+		Vector3.new( 2, 2.0, -1),  -- mid right
+		Vector3.new( 0, 2.0,  5),  -- rear center
 	}
 	for i, p in ipairs(players) do
 		local char = p.Character

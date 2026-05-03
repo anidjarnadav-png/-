@@ -46,32 +46,32 @@ GameConfig.Plane = {
 -- ====== Island ======
 GameConfig.Island = {
 	Seed                   = 12345,
-	BaseSize               = Vector3.new(500, 4, 500),
+	BaseSize               = Vector3.new(800, 4, 800),
 	BaseColor              = Color3.fromRGB(86, 140, 70),
 	BeachColor             = Color3.fromRGB(230, 210, 160),
-	WaterSize              = Vector3.new(2000, 2, 2000),
+	WaterSize              = Vector3.new(2400, 2, 2400),
 	WaterColor             = Color3.fromRGB(40, 100, 160),
 	WaterY                 = -2,
-	NumTrees               = 80,
-	NumRocks               = 40,
-	NumHills               = 6,
+	NumTrees               = 160,
+	NumRocks               = 80,
+	NumHills               = 12,
 	CrashClearRadius       = 30,
 }
 
 -- ====== Animal Spawning ======
 -- Spawn cap rises over round time. Spawn weights shift toward higher-level animals.
 GameConfig.AnimalSpawning = {
-	MaxAlive               = 18,
-	SpawnInterval          = 4.0,
+	MaxAlive               = 24,
+	SpawnInterval          = 3.5,
 	MinDistanceFromPlayer  = 60,
-	MaxDistanceFromPlayer  = 180,
+	MaxDistanceFromPlayer  = 220,
 	-- Time-thresholds (seconds since round start) -> {dog, wolf, bear, lion} weights
 	WeightStages = {
-		{ time = 0,    weights = {70, 25, 5,  0 } },
-		{ time = 60,   weights = {50, 35, 13, 2 } },
-		{ time = 180,  weights = {30, 35, 25, 10} },
-		{ time = 360,  weights = {15, 30, 35, 20} },
-		{ time = 600,  weights = {5,  20, 40, 35} },
+		{ time = 0,    weights = {55, 25, 12, 8 } },  -- lions 8% from the start
+		{ time = 60,   weights = {35, 30, 22, 13} },
+		{ time = 150,  weights = {20, 30, 30, 20} },
+		{ time = 300,  weights = {12, 25, 33, 30} },
+		{ time = 480,  weights = {8,  20, 32, 40} },
 	},
 }
 

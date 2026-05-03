@@ -119,15 +119,24 @@ function RoundManager.OnPlayerDied(player, killedByName)
 	-- Start the 15-second countdown that returns the player to the lobby.
 	RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRecord)
 
-	-- Check if all players are dead.
-	task.delay(0.5, function()
-		local anyAlive = false
-		for _, p in ipairs(Players:GetPlayers()) do
-			local sess = dm().GetSession(p)
-			if sess.Alive then anyAlive = true break end
-		end
-		if not anyAlive then
-			RoundManager.EndRound("AllDead")
+	-- Check if everyone's done. We don't end the round while ANY player still
+	-- has an active death countdown (so they can still revive). Polls until
+	-- all players are either alive or have been returned to the lobby.
+	task.spawn(function()
+		while RoundManager.State == "PLAYING" do
+			task.wait(0.5)
+			local anyEngaged = false
+			for _, p in ipairs(Players:GetPlayers()) do
+				local sess = dm().GetSession(p)
+				if sess.Alive or sess.PendingLobbyReturn then
+					anyEngaged = true
+					break
+				end
+			end
+			if not anyEngaged then
+				RoundManager.EndRound("AllDead")
+				return
+			end
 		end
 	end)
 end
@@ -145,12 +154,28 @@ function RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRe
 	s.PendingLobbyReturn = true
 
 	task.spawn(function()
+		local function sendHide()
+			pcall(function()
+				getRemotes().DeathCountdown:FireClient(player, {
+					secondsLeft     = 0,
+					survivedSeconds = survived,
+					bestSeconds     = bestSeconds,
+					isNewRecord     = isNewRecord and true or false,
+					canRevive       = false,
+				})
+			end)
+		end
+
 		local total = GameConfig.Round.DeathLobbyReturnSec
 		for left = total, 1, -1 do
-			-- If a different countdown was started or player revived, stop.
-			if s.DeathTaskId ~= taskId then return end
+			-- If a different countdown was started or player revived, hide and stop.
+			if s.DeathTaskId ~= taskId then
+				sendHide()
+				return
+			end
 			if s.Alive then
 				s.PendingLobbyReturn = false
+				sendHide()
 				return
 			end
 			getRemotes().DeathCountdown:FireClient(player, {
@@ -164,19 +189,12 @@ function RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRe
 		end
 
 		-- Verify still dead and same task; if so, return to lobby.
-		if s.DeathTaskId ~= taskId then return end
-		if s.Alive then return end
+		if s.DeathTaskId ~= taskId then sendHide() return end
+		if s.Alive then sendHide() return end
 
 		s.PendingLobbyReturn = false
 		s.DeathTaskId = nil
-		-- Send a final tick with secondsLeft=0 so the GUI can fade.
-		getRemotes().DeathCountdown:FireClient(player, {
-			secondsLeft     = 0,
-			survivedSeconds = survived,
-			bestSeconds     = bestSeconds,
-			isNewRecord     = isNewRecord and true or false,
-			canRevive       = false,
-		})
+		sendHide()
 		-- Respawn back at the lobby spawn (clean, no weapon).
 		player:LoadCharacter()
 		task.wait(0.4)

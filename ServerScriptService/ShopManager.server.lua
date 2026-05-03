@@ -188,7 +188,13 @@ end
 
 function ShopManager.HandlePromptRevive(player)
 	local rm = _G.RoundManager
-	if not rm or rm.GetState() ~= "PLAYING" then return end
+	-- Allow during PLAYING (normal case) AND during the brief death window
+	-- before the round formally ends. The new round-end logic keeps state
+	-- as PLAYING while any player has a death countdown active.
+	if not rm or (rm.GetState() ~= "PLAYING" and rm.GetState() ~= "ENDING") then
+		warn("[ShopManager] PromptRevive blocked, state:", rm and rm.GetState() or "nil")
+		return
+	end
 	local sess = dm().GetSession(player)
 	if sess.UsedRevive then
 		getRemotes().ToastNotify:FireClient(player, {
@@ -196,11 +202,18 @@ function ShopManager.HandlePromptRevive(player)
 		})
 		return
 	end
+	-- Don't try to revive an already-alive player.
+	if sess.Alive then return end
+	print("[ShopManager] Prompting revive for", player.Name)
 	local ok, err = pcall(function()
 		MarketplaceService:PromptProductPurchase(player, GameConfig.Products.REVIVE)
 	end)
 	if not ok then
 		warn("[ShopManager] PromptRevive failed:", err)
+		getRemotes().ToastNotify:FireClient(player, {
+			text  = Strings.Notifications.PurchaseFailed,
+			color = Color3.fromRGB(255, 100, 100),
+		})
 	end
 end
 
