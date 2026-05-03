@@ -41,20 +41,26 @@ end
 
 local function grantRevive(player)
 	local rm = _G.RoundManager
-	if not rm then return false end
-	-- Allow purchase even if state is ENDING; useful if death came at the wire.
+	if not rm then
+		warn("[ProductHandler] grantRevive: RoundManager not ready")
+		return false
+	end
+	print("[ProductHandler] grantRevive for", player.Name, "state:", rm.GetState())
 	local ok = rm.RevivePlayer(player)
 	if not ok then
-		-- If we can't revive (e.g., already used), refund still is "granted" because
-		-- Roblox does not allow refunds; alert the player instead.
+		warn("[ProductHandler] RevivePlayer returned false. State:", rm.GetState())
 		getRemotes().ToastNotify:FireClient(player, {
-			text = Strings.Death.ReviveUsed, color = Color3.fromRGB(255,170,80),
+			text = "החייאה נכשלה - נסה שוב בסבב הבא",
+			color = Color3.fromRGB(255, 170, 80),
 		})
+	else
+		print("[ProductHandler] Revive successful for", player.Name)
 	end
 	return true
 end
 
 local function processReceipt(receiptInfo)
+	print("[ProductHandler] ProcessReceipt called for product", receiptInfo.ProductId, "player", receiptInfo.PlayerId)
 	local key = receiptInfo.PlayerId .. ":" .. receiptInfo.PurchaseId
 	if processed[key] then
 		return Enum.ProductPurchaseDecision.PurchaseGranted
@@ -76,10 +82,10 @@ local function processReceipt(receiptInfo)
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 
-	if not granted then
-		return Enum.ProductPurchaseDecision.NotProcessedYet
-	end
-
+	-- Always consume the purchase (return PurchaseGranted) once we've made
+	-- our best effort. For revive specifically we always grant — if the
+	-- revive itself failed (e.g., round state changed) the user has been
+	-- notified via toast and we don't want Roblox to retry the receipt.
 	processed[key] = true
 	return Enum.ProductPurchaseDecision.PurchaseGranted
 end

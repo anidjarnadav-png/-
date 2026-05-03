@@ -77,6 +77,12 @@ end
 -- Reset the player so they're ready to play another round.
 local function resetForLobby(player)
 	dm().ResetSession(player)
+	-- With auto-loads disabled, dead players have no character. Make one.
+	if not player.Character or not player.Character:FindFirstChildOfClass("Humanoid") or
+	   (player.Character:FindFirstChildOfClass("Humanoid").Health <= 0) then
+		player:LoadCharacter()
+		task.wait(0.2)
+	end
 	clearTools(player)
 	if player.Character then
 		local hum = player.Character:FindFirstChildOfClass("Humanoid")
@@ -206,26 +212,76 @@ function RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRe
 end
 
 function RoundManager.RevivePlayer(player)
-	if RoundManager.State ~= "PLAYING" then return false end
+	-- Allow during PLAYING and ENDING (defensive — purchase may have happened
+	-- right as the round was ending).
+	if RoundManager.State ~= "PLAYING" and RoundManager.State ~= "ENDING" then
+		warn("[RevivePlayer] Blocked, state:", RoundManager.State)
+		return false
+	end
 	local s = dm().GetSession(player)
-	if s.UsedRevive then return false end
+	if s.UsedRevive then
+		warn("[RevivePlayer] Already used revive for", player.Name)
+		return false
+	end
+	-- If the round had already ended, force it back to PLAYING for this revive.
+	if RoundManager.State == "ENDING" then
+		print("[RevivePlayer] Reversing ENDING -> PLAYING for late revive")
+		RoundManager.State = "PLAYING"
+		broadcastState({ reason = "late_revive" })
+		if _G.AnimalManager and _G.AnimalManager.StartSpawning then
+			_G.AnimalManager.StartSpawning()
+		end
+	end
+	print("[RevivePlayer] Reviving", player.Name)
 	s.UsedRevive = true
 	s.Alive = true
 	-- Cancel any pending death-to-lobby countdown for this player.
 	s.DeathTaskId = nil
 	s.PendingLobbyReturn = false
 
-	-- Respawn at a safe spot (crash position)
+	-- Force-hide the death GUI on the client immediately. We don't wait
+	-- for the countdown task to do this since there can be a race where
+	-- the player is already past the timer when ProcessReceipt fires.
+	pcall(function()
+		getRemotes().DeathCountdown:FireClient(player, {
+			secondsLeft = 0,
+			survivedSeconds = 0,
+			bestSeconds = _G.DataManager.GetBestTime(player),
+			isNewRecord = false,
+			canRevive = false,
+		})
+	end)
+
+	-- Respawn at a safe spot (crash position).
 	player:LoadCharacter()
 	local char = player.Character or player.CharacterAdded:Wait()
 	local hrp  = char:WaitForChild("HumanoidRootPart")
 	local crash = (_G.IslandBuilder and _G.IslandBuilder.GetCrashPosition()) or Vector3.new(0, 10, 0)
+	-- task.wait so the engine settles the new HRP before we move it.
+	task.wait(0.1)
 	hrp.CFrame = CFrame.new(crash + Vector3.new(0, 6, 0))
 
 	-- Re-equip starter weapon
 	if _G.ShopManager and _G.ShopManager.GiveWeapon then
 		_G.ShopManager.GiveWeapon(player, GameConfig.Round.StartingWeapon)
 	end
+
+	-- Apply HP/speed upgrades to the freshly-spawned humanoid.
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		local hpLevel = s.PlaneUpgrades.HP or 0
+		local spdLevel = s.PlaneUpgrades.Speed or 0
+		local maxHp = GameConfig.PlaneUpgrades.HP.Effect[hpLevel + 1] or GameConfig.Round.StartingHP
+		local spdMul = GameConfig.PlaneUpgrades.Speed.Effect[spdLevel + 1] or 1
+		hum.MaxHealth = maxHp
+		hum.Health    = maxHp
+		hum.WalkSpeed = 16 * spdMul
+	end
+
+	-- Force-update HUD so the client sees alive=true immediately.
+	pcall(function()
+		getRemotes().UpdateHUD:FireClient(player, RoundManager.BuildHUD(player))
+	end)
 
 	getRemotes().ToastNotify:FireClient(player, {
 		text = "החייאה הצליחה!",
@@ -371,27 +427,44 @@ end
 
 -- ====== Bootstrap ======
 function RoundManager.Start()
-	-- On player join, place them in the lobby and reset session.
+	-- We control all character spawning ourselves so dead players stay dead
+	-- (no auto-respawn) until either revive or the lobby-return countdown
+	-- finishes.
+	Players.CharacterAutoLoads = false
+
+	local function setupCharacter(player, char)
+		-- Hook death detection.
+		local hum = char:WaitForChild("Humanoid", 5)
+		if hum then
+			hum.Died:Connect(function()
+				RoundManager.OnPlayerDied(player, "סכנה")
+			end)
+		end
+		-- Send fresh HUD pulse so the new client sees correct state.
+		task.delay(0.4, function()
+			if not player.Parent then return end
+			getRemotes().UpdateHUD:FireClient(player, RoundManager.BuildHUD(player))
+		end)
+	end
+
+	local function spawnNewPlayer(player)
+		-- New players always start in the lobby.
+		dm().ResetSession(player)
+		player:LoadCharacter()
+		task.wait(0.2)
+		teleportToLobby(player)
+	end
+
 	Players.PlayerAdded:Connect(function(player)
 		player.CharacterAdded:Connect(function(char)
-			task.wait(0.2)
-			if RoundManager.State == "LOBBY" or RoundManager.State == "COUNTDOWN" then
-				resetForLobby(player)
-			elseif RoundManager.State == "PLAYING" then
-				-- Late joiner: stays in lobby until next round
-				teleportToLobby(player)
-			end
-			-- HUD pulse
-			task.delay(0.5, function()
-				if not player.Parent then return end
-				getRemotes().UpdateHUD:FireClient(player, RoundManager.BuildHUD(player))
-			end)
+			-- Whoever LoadCharacter'd this character is responsible for
+			-- positioning it. We just attach death detection + HUD.
+			setupCharacter(player, char)
 		end)
+		task.spawn(spawnNewPlayer, player)
 	end)
 	for _, p in ipairs(Players:GetPlayers()) do
-		if p.Character then
-			task.spawn(resetForLobby, p)
-		end
+		task.spawn(spawnNewPlayer, p)
 	end
 
 	-- HUD update pulse for everyone
@@ -403,16 +476,6 @@ function RoundManager.Start()
 				getRemotes().UpdateHUD:FireClient(p, RoundManager.BuildHUD(p))
 			end
 		end
-	end)
-
-	-- Watch deaths
-	Players.PlayerAdded:Connect(function(player)
-		player.CharacterAdded:Connect(function(char)
-			local hum = char:WaitForChild("Humanoid")
-			hum.Died:Connect(function()
-				RoundManager.OnPlayerDied(player, "סכנה")
-			end)
-		end)
 	end)
 
 	setState("LOBBY")

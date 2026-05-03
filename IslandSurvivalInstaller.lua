@@ -1,13 +1,12 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v2.2)
+-- IslandSurvivalInstaller.lua  (v2.3 — revive race fix)
 -- ====================================================================
--- NON-DESTRUCTIVE installer for the Island Survival game. Only the
--- 23 scripts named here are replaced; any other scripts you have in
--- ReplicatedStorage / ServerScriptService / StarterGui / StarterPlayerScripts
--- are left untouched.
+-- NON-DESTRUCTIVE installer for the Island Survival game. Only the 23
+-- scripts named here are replaced; any other scripts in the same
+-- containers are left untouched.
 --
 -- USAGE
---   1. Roblox Studio -> Game Settings -> Security: enable Allow API Services.
+--   1. Roblox Studio -> Game Settings -> Security: Allow API Services ON.
 --   2. View -> Command Bar.
 --   3. Paste this entire script and press Enter.
 --   4. Press Play (F5).
@@ -1115,6 +1114,12 @@ end
 -- Reset the player so they're ready to play another round.
 local function resetForLobby(player)
 	dm().ResetSession(player)
+	-- With auto-loads disabled, dead players have no character. Make one.
+	if not player.Character or not player.Character:FindFirstChildOfClass("Humanoid") or
+	   (player.Character:FindFirstChildOfClass("Humanoid").Health <= 0) then
+		player:LoadCharacter()
+		task.wait(0.2)
+	end
 	clearTools(player)
 	if player.Character then
 		local hum = player.Character:FindFirstChildOfClass("Humanoid")
@@ -1244,26 +1249,76 @@ function RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRe
 end
 
 function RoundManager.RevivePlayer(player)
-	if RoundManager.State ~= "PLAYING" then return false end
+	-- Allow during PLAYING and ENDING (defensive — purchase may have happened
+	-- right as the round was ending).
+	if RoundManager.State ~= "PLAYING" and RoundManager.State ~= "ENDING" then
+		warn("[RevivePlayer] Blocked, state:", RoundManager.State)
+		return false
+	end
 	local s = dm().GetSession(player)
-	if s.UsedRevive then return false end
+	if s.UsedRevive then
+		warn("[RevivePlayer] Already used revive for", player.Name)
+		return false
+	end
+	-- If the round had already ended, force it back to PLAYING for this revive.
+	if RoundManager.State == "ENDING" then
+		print("[RevivePlayer] Reversing ENDING -> PLAYING for late revive")
+		RoundManager.State = "PLAYING"
+		broadcastState({ reason = "late_revive" })
+		if _G.AnimalManager and _G.AnimalManager.StartSpawning then
+			_G.AnimalManager.StartSpawning()
+		end
+	end
+	print("[RevivePlayer] Reviving", player.Name)
 	s.UsedRevive = true
 	s.Alive = true
 	-- Cancel any pending death-to-lobby countdown for this player.
 	s.DeathTaskId = nil
 	s.PendingLobbyReturn = false
 
-	-- Respawn at a safe spot (crash position)
+	-- Force-hide the death GUI on the client immediately. We don't wait
+	-- for the countdown task to do this since there can be a race where
+	-- the player is already past the timer when ProcessReceipt fires.
+	pcall(function()
+		getRemotes().DeathCountdown:FireClient(player, {
+			secondsLeft = 0,
+			survivedSeconds = 0,
+			bestSeconds = _G.DataManager.GetBestTime(player),
+			isNewRecord = false,
+			canRevive = false,
+		})
+	end)
+
+	-- Respawn at a safe spot (crash position).
 	player:LoadCharacter()
 	local char = player.Character or player.CharacterAdded:Wait()
 	local hrp  = char:WaitForChild("HumanoidRootPart")
 	local crash = (_G.IslandBuilder and _G.IslandBuilder.GetCrashPosition()) or Vector3.new(0, 10, 0)
+	-- task.wait so the engine settles the new HRP before we move it.
+	task.wait(0.1)
 	hrp.CFrame = CFrame.new(crash + Vector3.new(0, 6, 0))
 
 	-- Re-equip starter weapon
 	if _G.ShopManager and _G.ShopManager.GiveWeapon then
 		_G.ShopManager.GiveWeapon(player, GameConfig.Round.StartingWeapon)
 	end
+
+	-- Apply HP/speed upgrades to the freshly-spawned humanoid.
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if hum then
+		local hpLevel = s.PlaneUpgrades.HP or 0
+		local spdLevel = s.PlaneUpgrades.Speed or 0
+		local maxHp = GameConfig.PlaneUpgrades.HP.Effect[hpLevel + 1] or GameConfig.Round.StartingHP
+		local spdMul = GameConfig.PlaneUpgrades.Speed.Effect[spdLevel + 1] or 1
+		hum.MaxHealth = maxHp
+		hum.Health    = maxHp
+		hum.WalkSpeed = 16 * spdMul
+	end
+
+	-- Force-update HUD so the client sees alive=true immediately.
+	pcall(function()
+		getRemotes().UpdateHUD:FireClient(player, RoundManager.BuildHUD(player))
+	end)
 
 	getRemotes().ToastNotify:FireClient(player, {
 		text = "החייאה הצליחה!",
@@ -1409,27 +1464,44 @@ end
 
 -- ====== Bootstrap ======
 function RoundManager.Start()
-	-- On player join, place them in the lobby and reset session.
+	-- We control all character spawning ourselves so dead players stay dead
+	-- (no auto-respawn) until either revive or the lobby-return countdown
+	-- finishes.
+	Players.CharacterAutoLoads = false
+
+	local function setupCharacter(player, char)
+		-- Hook death detection.
+		local hum = char:WaitForChild("Humanoid", 5)
+		if hum then
+			hum.Died:Connect(function()
+				RoundManager.OnPlayerDied(player, "סכנה")
+			end)
+		end
+		-- Send fresh HUD pulse so the new client sees correct state.
+		task.delay(0.4, function()
+			if not player.Parent then return end
+			getRemotes().UpdateHUD:FireClient(player, RoundManager.BuildHUD(player))
+		end)
+	end
+
+	local function spawnNewPlayer(player)
+		-- New players always start in the lobby.
+		dm().ResetSession(player)
+		player:LoadCharacter()
+		task.wait(0.2)
+		teleportToLobby(player)
+	end
+
 	Players.PlayerAdded:Connect(function(player)
 		player.CharacterAdded:Connect(function(char)
-			task.wait(0.2)
-			if RoundManager.State == "LOBBY" or RoundManager.State == "COUNTDOWN" then
-				resetForLobby(player)
-			elseif RoundManager.State == "PLAYING" then
-				-- Late joiner: stays in lobby until next round
-				teleportToLobby(player)
-			end
-			-- HUD pulse
-			task.delay(0.5, function()
-				if not player.Parent then return end
-				getRemotes().UpdateHUD:FireClient(player, RoundManager.BuildHUD(player))
-			end)
+			-- Whoever LoadCharacter'd this character is responsible for
+			-- positioning it. We just attach death detection + HUD.
+			setupCharacter(player, char)
 		end)
+		task.spawn(spawnNewPlayer, player)
 	end)
 	for _, p in ipairs(Players:GetPlayers()) do
-		if p.Character then
-			task.spawn(resetForLobby, p)
-		end
+		task.spawn(spawnNewPlayer, p)
 	end
 
 	-- HUD update pulse for everyone
@@ -1441,16 +1513,6 @@ function RoundManager.Start()
 				getRemotes().UpdateHUD:FireClient(p, RoundManager.BuildHUD(p))
 			end
 		end
-	end)
-
-	-- Watch deaths
-	Players.PlayerAdded:Connect(function(player)
-		player.CharacterAdded:Connect(function(char)
-			local hum = char:WaitForChild("Humanoid")
-			hum.Died:Connect(function()
-				RoundManager.OnPlayerDied(player, "סכנה")
-			end)
-		end)
 	end)
 
 	setState("LOBBY")
@@ -2878,20 +2940,26 @@ end
 
 local function grantRevive(player)
 	local rm = _G.RoundManager
-	if not rm then return false end
-	-- Allow purchase even if state is ENDING; useful if death came at the wire.
+	if not rm then
+		warn("[ProductHandler] grantRevive: RoundManager not ready")
+		return false
+	end
+	print("[ProductHandler] grantRevive for", player.Name, "state:", rm.GetState())
 	local ok = rm.RevivePlayer(player)
 	if not ok then
-		-- If we can't revive (e.g., already used), refund still is "granted" because
-		-- Roblox does not allow refunds; alert the player instead.
+		warn("[ProductHandler] RevivePlayer returned false. State:", rm.GetState())
 		getRemotes().ToastNotify:FireClient(player, {
-			text = Strings.Death.ReviveUsed, color = Color3.fromRGB(255,170,80),
+			text = "החייאה נכשלה - נסה שוב בסבב הבא",
+			color = Color3.fromRGB(255, 170, 80),
 		})
+	else
+		print("[ProductHandler] Revive successful for", player.Name)
 	end
 	return true
 end
 
 local function processReceipt(receiptInfo)
+	print("[ProductHandler] ProcessReceipt called for product", receiptInfo.ProductId, "player", receiptInfo.PlayerId)
 	local key = receiptInfo.PlayerId .. ":" .. receiptInfo.PurchaseId
 	if processed[key] then
 		return Enum.ProductPurchaseDecision.PurchaseGranted
@@ -2913,10 +2981,10 @@ local function processReceipt(receiptInfo)
 		return Enum.ProductPurchaseDecision.NotProcessedYet
 	end
 
-	if not granted then
-		return Enum.ProductPurchaseDecision.NotProcessedYet
-	end
-
+	-- Always consume the purchase (return PurchaseGranted) once we've made
+	-- our best effort. For revive specifically we always grant — if the
+	-- revive itself failed (e.g., round state changed) the user has been
+	-- notified via toast and we don't want Roblox to retry the receipt.
 	processed[key] = true
 	return Enum.ProductPurchaseDecision.PurchaseGranted
 end
@@ -4498,10 +4566,6 @@ end)
 ]==]
 
 
--- ====================================================================
--- INSTALL ALL SCRIPTS  (only those listed here are touched)
--- ====================================================================
-
 local installed = {}
 local function track(parent, name, className, src)
 	ensure(parent, name, className, src)
@@ -4548,5 +4612,4 @@ print("[Install] Island Survival installed successfully")
 print(string.format("[Install] %d scripts replaced (all other scripts left untouched)", #installed))
 for _, n in ipairs(installed) do print("    -", n) end
 print("[Install] Press Play (F5) to test.")
-print("[Install] Make sure 'Allow API Services' is ON in Game Settings -> Security.")
 print("==============================================================")
