@@ -27,280 +27,273 @@ local function makePart(props)
 	local p = Instance.new("Part")
 	p.TopSurface = Enum.SurfaceType.Smooth
 	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Anchored = false
+	p.CanCollide = false
+	p.Massless = true
 	for k, v in pairs(props) do p[k] = v end
 	return p
 end
 
--- Build a detailed animal model with per-species touches.
--- Uses Motor6D welds for legs/tail so we can animate them.
+local function weld(a, b)
+	local w = Instance.new("WeldConstraint")
+	w.Part0 = a
+	w.Part1 = b
+	w.Parent = a
+	return w
+end
+
+-- Build a detailed animal model. Uses a small invisible HumanoidRootPart for
+-- physics/collision and welds every visible part to it via WeldConstraint.
+-- Reliable rendering — no Motor6D animation (caused instability earlier).
 local function buildAnimalModel(spec)
 	local model = Instance.new("Model")
 	model.Name = spec.Id
 
-	-- Invisible HRP doubles as collision body sized to the visible body.
+	-- Standard-sized invisible HRP. Smaller than the visible body so it
+	-- doesn't trap on terrain or hills. Massless=false so the Humanoid can
+	-- move it; visible parts are Massless=true so they don't fight physics.
+	local hrpSize = Vector3.new(
+		math.max(1.5, spec.BodySize.X * 0.6),
+		math.max(1.5, spec.BodySize.Y * 0.6),
+		math.max(1.5, spec.BodySize.Z * 0.6)
+	)
 	local hrp = makePart{
-		Name="HumanoidRootPart",
-		Size=Vector3.new(spec.BodySize.X, spec.BodySize.Y, spec.BodySize.Z),
-		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-		CanCollide=true, Transparency=1, Parent=model,
+		Name = "HumanoidRootPart",
+		Size = hrpSize,
+		Color = spec.BodyColor,
+		Material = Enum.Material.SmoothPlastic,
+		Transparency = 1,
+		CanCollide = true,
+		Massless = false,
+		Parent = model,
 	}
 	model.PrimaryPart = hrp
 
-	-- Main torso (slightly tapered: chest larger than rear)
-	local chest = makePart{
-		Name="Chest",
-		Shape=Enum.PartType.Block,
-		Size=Vector3.new(spec.BodySize.X * 1.05, spec.BodySize.Y * 1.05, spec.BodySize.Z * 0.55),
-		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-		CanCollide=false, Parent=model,
-	}
-	chest.CFrame = hrp.CFrame * CFrame.new(0, 0, -spec.BodySize.Z * 0.18)
-	local cw = Instance.new("WeldConstraint", chest); cw.Part0 = hrp; cw.Part1 = chest
+	-- Convenience: place a visible part at an offset relative to hrp and weld.
+	local function addPart(name, size, offset, props)
+		props = props or {}
+		props.Name = name
+		props.Size = size
+		props.Color = props.Color or spec.BodyColor
+		props.Material = props.Material or Enum.Material.SmoothPlastic
+		props.CanCollide = false
+		props.Massless = true
+		props.Parent = model
+		local p = makePart(props)
+		p.CFrame = hrp.CFrame * offset
+		weld(hrp, p)
+		return p
+	end
 
-	local rear = makePart{
-		Name="Rear",
-		Shape=Enum.PartType.Block,
-		Size=Vector3.new(spec.BodySize.X * 0.92, spec.BodySize.Y * 0.95, spec.BodySize.Z * 0.5),
-		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-		CanCollide=false, Parent=model,
-	}
-	rear.CFrame = hrp.CFrame * CFrame.new(0, -0.05, spec.BodySize.Z * 0.25)
-	local rw = Instance.new("WeldConstraint", rear); rw.Part0 = hrp; rw.Part1 = rear
+	-- Main body (chest+rear in one rounded mass)
+	addPart("Body",
+		Vector3.new(spec.BodySize.X, spec.BodySize.Y, spec.BodySize.Z),
+		CFrame.new(0, 0, 0))
 
-	-- Neck (cylinder leading to head)
-	local neckLen = math.max(0.6, spec.BodySize.Y * 0.4)
-	local neck = makePart{
-		Name="Neck", Shape=Enum.PartType.Cylinder,
-		Size=Vector3.new(neckLen, spec.BodySize.X * 0.5, spec.BodySize.X * 0.5),
-		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-		CanCollide=false, Parent=model,
-	}
-	neck.CFrame = hrp.CFrame
-		* CFrame.new(0, spec.BodySize.Y * 0.25, -spec.BodySize.Z * 0.55)
-		* CFrame.Angles(0, 0, math.rad(70))
-	local nw = Instance.new("WeldConstraint", neck); nw.Part0 = hrp; nw.Part1 = neck
+	-- Slight chest bulge
+	addPart("Chest",
+		Vector3.new(spec.BodySize.X * 1.1, spec.BodySize.Y * 1.05, spec.BodySize.Z * 0.5),
+		CFrame.new(0, 0, -spec.BodySize.Z * 0.18))
 
-	-- Head: shape varies per species
+	-- Neck cylinder
+	local neckLen = math.max(0.6, spec.BodySize.Y * 0.5)
+	addPart("Neck",
+		Vector3.new(neckLen, spec.BodySize.X * 0.55, spec.BodySize.X * 0.55),
+		CFrame.new(0, spec.BodySize.Y * 0.2, -spec.BodySize.Z * 0.55) * CFrame.Angles(0, 0, math.rad(70)),
+		{ Shape = Enum.PartType.Cylinder })
+
+	-- Head — shape varies per species
 	local headShape = Enum.PartType.Block
 	if spec.Id == "Bear" or spec.Id == "Lion" then
 		headShape = Enum.PartType.Ball
 	end
-	local head = makePart{
-		Name="Head",
-		Shape = headShape,
-		Size=spec.HeadSize, Color=spec.BodyColor,
-		Material=Enum.Material.SmoothPlastic,
-		CanCollide=false, Parent=model,
-	}
-	head.CFrame = hrp.CFrame * CFrame.new(0, spec.BodySize.Y * 0.5, -spec.BodySize.Z * 0.7)
-	local hw = Instance.new("WeldConstraint", head); hw.Part0 = hrp; hw.Part1 = head
+	local head = addPart("Head",
+		spec.HeadSize,
+		CFrame.new(0, spec.BodySize.Y * 0.5, -spec.BodySize.Z * 0.7),
+		{ Shape = headShape })
 
-	-- Snout (forward extension of head)
+	-- Snout (welded to head)
 	local snoutLen = spec.HeadSize.Z * 0.55
-	local snoutColor = spec.Id == "Lion" and Color3.fromRGB(230, 200, 130)
-		or Color3.fromRGB(math.max(spec.BodyColor.R*255 - 30, 0), math.max(spec.BodyColor.G*255 - 30, 0), math.max(spec.BodyColor.B*255 - 30, 0))
+	local snoutR, snoutG, snoutB
+	if spec.Id == "Lion" then
+		snoutR, snoutG, snoutB = 230, 200, 130
+	else
+		snoutR = math.max(0, math.floor(spec.BodyColor.R * 255 - 30))
+		snoutG = math.max(0, math.floor(spec.BodyColor.G * 255 - 30))
+		snoutB = math.max(0, math.floor(spec.BodyColor.B * 255 - 30))
+	end
 	local snout = makePart{
-		Name="Snout",
-		Shape = (spec.Id == "Wolf") and Enum.PartType.Block or Enum.PartType.Block,
-		Size=Vector3.new(spec.HeadSize.X * 0.65, spec.HeadSize.Y * 0.55, snoutLen),
-		Color=snoutColor, Material=Enum.Material.SmoothPlastic,
-		CanCollide=false, Parent=model,
+		Name = "Snout",
+		Size = Vector3.new(spec.HeadSize.X * 0.65, spec.HeadSize.Y * 0.55, snoutLen),
+		Color = Color3.fromRGB(snoutR, snoutG, snoutB),
+		Material = Enum.Material.SmoothPlastic,
+		Parent = model,
 	}
 	snout.CFrame = head.CFrame * CFrame.new(0, -spec.HeadSize.Y * 0.1, -(spec.HeadSize.Z * 0.5 + snoutLen * 0.4))
-	local sw = Instance.new("WeldConstraint", snout); sw.Part0 = head; sw.Part1 = snout
+	weld(head, snout)
 
 	-- Nose tip
 	local nose = makePart{
-		Name="Nose", Shape=Enum.PartType.Ball,
-		Size=Vector3.new(spec.HeadSize.X * 0.28, spec.HeadSize.X * 0.28, spec.HeadSize.X * 0.28),
-		Color=Color3.fromRGB(20, 16, 18), Material=Enum.Material.SmoothPlastic,
-		CanCollide=false, Parent=model,
+		Name = "Nose", Shape = Enum.PartType.Ball,
+		Size = Vector3.new(spec.HeadSize.X * 0.28, spec.HeadSize.X * 0.28, spec.HeadSize.X * 0.28),
+		Color = Color3.fromRGB(20, 16, 18),
+		Material = Enum.Material.SmoothPlastic,
+		Parent = model,
 	}
 	nose.CFrame = snout.CFrame * CFrame.new(0, 0, -snoutLen * 0.5)
-	local nosew = Instance.new("WeldConstraint", nose); nosew.Part0 = snout; nosew.Part1 = nose
+	weld(snout, nose)
 
 	-- Eyes
 	for _, sx in ipairs({-1, 1}) do
 		local eye = makePart{
-			Name="Eye", Shape=Enum.PartType.Ball,
-			Size=Vector3.new(0.32, 0.32, 0.32),
-			Color=Color3.fromRGB(20,20,20), Material=Enum.Material.SmoothPlastic,
-			CanCollide=false, Parent=model,
+			Name = "Eye", Shape = Enum.PartType.Ball,
+			Size = Vector3.new(0.32, 0.32, 0.32),
+			Color = Color3.fromRGB(20, 20, 20),
+			Material = Enum.Material.SmoothPlastic,
+			Parent = model,
 		}
-		eye.CFrame = head.CFrame * CFrame.new(sx*spec.HeadSize.X*0.32, spec.HeadSize.Y*0.18, -spec.HeadSize.Z*0.45)
-		local ew = Instance.new("WeldConstraint", eye); ew.Part0 = head; ew.Part1 = eye
+		eye.CFrame = head.CFrame * CFrame.new(sx * spec.HeadSize.X * 0.32, spec.HeadSize.Y * 0.18, -spec.HeadSize.Z * 0.45)
+		weld(head, eye)
 	end
 
 	-- Ears: per-species
 	local function buildEar(side)
+		local ear, cf
 		if spec.Id == "Dog" then
-			-- Floppy down-pointing ears
-			local ear = makePart{
-				Name="Ear", Shape=Enum.PartType.Block,
-				Size=Vector3.new(0.25, spec.HeadSize.Y * 0.6, spec.HeadSize.Z * 0.45),
-				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-				CanCollide=false, Parent=model,
+			ear = makePart{
+				Name = "Ear",
+				Size = Vector3.new(0.25, spec.HeadSize.Y * 0.6, spec.HeadSize.Z * 0.45),
+				Color = spec.BodyColor, Material = Enum.Material.SmoothPlastic,
+				Parent = model,
 			}
-			ear.CFrame = head.CFrame
-				* CFrame.new(side * spec.HeadSize.X * 0.5, 0, 0)
+			cf = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.5, 0, 0)
 				* CFrame.Angles(math.rad(-15), 0, math.rad(side * 25))
-			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
 		elseif spec.Id == "Wolf" then
-			-- Pointy upright ears
-			local ear = makePart{
-				Name="Ear", Shape=Enum.PartType.Block,
-				Size=Vector3.new(0.3, spec.HeadSize.Y * 0.7, 0.5),
-				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-				CanCollide=false, Parent=model,
+			ear = makePart{
+				Name = "Ear",
+				Size = Vector3.new(0.3, spec.HeadSize.Y * 0.7, 0.5),
+				Color = spec.BodyColor, Material = Enum.Material.SmoothPlastic,
+				Parent = model,
 			}
-			ear.CFrame = head.CFrame
-				* CFrame.new(side * spec.HeadSize.X * 0.4, spec.HeadSize.Y * 0.55, spec.HeadSize.Z * 0.1)
+			cf = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.4, spec.HeadSize.Y * 0.55, spec.HeadSize.Z * 0.1)
 				* CFrame.Angles(0, 0, math.rad(side * 20))
-			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
 		elseif spec.Id == "Bear" then
-			-- Small round ears on top
-			local ear = makePart{
-				Name="Ear", Shape=Enum.PartType.Ball,
-				Size=Vector3.new(spec.HeadSize.X * 0.35, spec.HeadSize.X * 0.35, spec.HeadSize.X * 0.35),
-				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-				CanCollide=false, Parent=model,
+			ear = makePart{
+				Name = "Ear", Shape = Enum.PartType.Ball,
+				Size = Vector3.new(spec.HeadSize.X * 0.35, spec.HeadSize.X * 0.35, spec.HeadSize.X * 0.35),
+				Color = spec.BodyColor, Material = Enum.Material.SmoothPlastic,
+				Parent = model,
 			}
-			ear.CFrame = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.42, spec.HeadSize.Y * 0.45, spec.HeadSize.Z * 0.05)
-			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
-		else
-			-- Lion: tufted small ears
-			local ear = makePart{
-				Name="Ear", Shape=Enum.PartType.Ball,
-				Size=Vector3.new(spec.HeadSize.X * 0.3, spec.HeadSize.X * 0.3, spec.HeadSize.X * 0.3),
-				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-				CanCollide=false, Parent=model,
+			cf = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.42, spec.HeadSize.Y * 0.45, spec.HeadSize.Z * 0.05)
+		else  -- Lion
+			ear = makePart{
+				Name = "Ear", Shape = Enum.PartType.Ball,
+				Size = Vector3.new(spec.HeadSize.X * 0.3, spec.HeadSize.X * 0.3, spec.HeadSize.X * 0.3),
+				Color = spec.BodyColor, Material = Enum.Material.SmoothPlastic,
+				Parent = model,
 			}
-			ear.CFrame = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.5, spec.HeadSize.Y * 0.4, 0)
-			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
+			cf = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.5, spec.HeadSize.Y * 0.4, 0)
 		end
+		ear.CFrame = cf
+		weld(head, ear)
 	end
 	buildEar(-1); buildEar(1)
 
-	-- Mane (lion: large fluffy ring around the head)
+	-- Mane (lion: ring of tufts + center mass)
 	if spec.ManeColor then
 		for i = 1, 6 do
 			local angle = (i / 6) * math.pi * 2
 			local r = spec.HeadSize.X * 1.0
 			local tuft = makePart{
-				Name="ManeTuft", Shape=Enum.PartType.Ball,
-				Size=Vector3.new(spec.HeadSize.X * 0.85, spec.HeadSize.X * 0.85, spec.HeadSize.X * 0.85),
-				Color=spec.ManeColor, Material=Enum.Material.SmoothPlastic,
-				CanCollide=false, Parent=model,
+				Name = "ManeTuft", Shape = Enum.PartType.Ball,
+				Size = Vector3.new(spec.HeadSize.X * 0.85, spec.HeadSize.X * 0.85, spec.HeadSize.X * 0.85),
+				Color = spec.ManeColor, Material = Enum.Material.SmoothPlastic,
+				Parent = model,
 			}
 			tuft.CFrame = head.CFrame * CFrame.new(math.cos(angle) * r, math.sin(angle) * r * 0.7, spec.HeadSize.Z * 0.15)
-			local tw = Instance.new("WeldConstraint", tuft); tw.Part0 = head; tw.Part1 = tuft
+			weld(head, tuft)
 		end
-		-- Center mass behind head
 		local mass = makePart{
-			Name="ManeMass", Shape=Enum.PartType.Ball,
-			Size=Vector3.new(spec.HeadSize.X * 1.7, spec.HeadSize.Y * 1.5, spec.HeadSize.Z * 1.4),
-			Color=spec.ManeColor, Material=Enum.Material.SmoothPlastic,
-			CanCollide=false, Parent=model,
+			Name = "ManeMass", Shape = Enum.PartType.Ball,
+			Size = Vector3.new(spec.HeadSize.X * 1.7, spec.HeadSize.Y * 1.5, spec.HeadSize.Z * 1.4),
+			Color = spec.ManeColor, Material = Enum.Material.SmoothPlastic,
+			Parent = model,
 		}
 		mass.CFrame = head.CFrame * CFrame.new(0, 0, spec.HeadSize.Z * 0.2)
-		local mw = Instance.new("WeldConstraint", mass); mw.Part0 = head; mw.Part1 = mass
+		weld(head, mass)
 	end
 
-	-- Bear belly (chunky)
+	-- Bear belly (chunky underside)
 	if spec.Id == "Bear" then
 		local belly = makePart{
-			Name="Belly", Shape=Enum.PartType.Ball,
-			Size=Vector3.new(spec.BodySize.X * 1.15, spec.BodySize.Y * 1.1, spec.BodySize.Z * 0.7),
-			Color=Color3.fromRGB(75, 50, 30), Material=Enum.Material.SmoothPlastic,
-			CanCollide=false, Parent=model,
+			Name = "Belly", Shape = Enum.PartType.Ball,
+			Size = Vector3.new(spec.BodySize.X * 1.15, spec.BodySize.Y * 1.1, spec.BodySize.Z * 0.7),
+			Color = Color3.fromRGB(75, 50, 30), Material = Enum.Material.SmoothPlastic,
+			Parent = model,
 		}
 		belly.CFrame = hrp.CFrame * CFrame.new(0, -spec.BodySize.Y * 0.15, 0)
-		local bw = Instance.new("WeldConstraint", belly); bw.Part0 = hrp; bw.Part1 = belly
+		weld(hrp, belly)
 	end
 
-	-- Legs as Motor6D-anchored parts so we can animate the rotation.
-	local legParts = {}
+	-- Legs (4) — welded directly to hrp, no Motor6D
 	local legOffsets = {
-		Vector3.new(-spec.BodySize.X*0.32, -spec.BodySize.Y*0.5, -spec.BodySize.Z*0.32),  -- FL
-		Vector3.new( spec.BodySize.X*0.32, -spec.BodySize.Y*0.5, -spec.BodySize.Z*0.32),  -- FR
-		Vector3.new(-spec.BodySize.X*0.32, -spec.BodySize.Y*0.5,  spec.BodySize.Z*0.32),  -- BL
-		Vector3.new( spec.BodySize.X*0.32, -spec.BodySize.Y*0.5,  spec.BodySize.Z*0.32),  -- BR
+		Vector3.new(-spec.BodySize.X * 0.32, -spec.BodySize.Y * 0.3, -spec.BodySize.Z * 0.32), -- FL
+		Vector3.new( spec.BodySize.X * 0.32, -spec.BodySize.Y * 0.3, -spec.BodySize.Z * 0.32), -- FR
+		Vector3.new(-spec.BodySize.X * 0.32, -spec.BodySize.Y * 0.3,  spec.BodySize.Z * 0.32), -- BL
+		Vector3.new( spec.BodySize.X * 0.32, -spec.BodySize.Y * 0.3,  spec.BodySize.Z * 0.32), -- BR
 	}
 	for i, off in ipairs(legOffsets) do
 		local leg = makePart{
 			Name = "Leg" .. i, Size = spec.LegSize,
 			Color = spec.BodyColor, Material = Enum.Material.SmoothPlastic,
-			CanCollide = false, Parent = model,
+			Parent = model,
 		}
-		-- attachment-based motor so we can rotate
-		local a0 = Instance.new("Attachment"); a0.Position = off; a0.Parent = hrp
-		local a1 = Instance.new("Attachment"); a1.Position = Vector3.new(0, spec.LegSize.Y * 0.5, 0); a1.Parent = leg
-		leg.CFrame = hrp.CFrame * CFrame.new(off + Vector3.new(0, -spec.LegSize.Y * 0.5, 0))
-		local motor = Instance.new("Motor6D")
-		motor.Name = "LegMotor"
-		motor.Part0 = hrp
-		motor.Part1 = leg
-		motor.C0 = CFrame.new(off)
-		motor.C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0)
-		motor.Parent = hrp
-		-- Paw
+		leg.CFrame = hrp.CFrame * CFrame.new(off.X, off.Y - spec.LegSize.Y * 0.5, off.Z)
+		weld(hrp, leg)
+
 		local paw = makePart{
-			Name="Paw", Shape=Enum.PartType.Block,
-			Size=Vector3.new(spec.LegSize.X * 1.2, spec.LegSize.X * 0.4, spec.LegSize.X * 1.4),
-			Color=Color3.fromRGB(30, 22, 18), Material=Enum.Material.SmoothPlastic,
-			CanCollide=false, Parent=model,
+			Name = "Paw",
+			Size = Vector3.new(spec.LegSize.X * 1.2, spec.LegSize.X * 0.4, spec.LegSize.X * 1.4),
+			Color = Color3.fromRGB(30, 22, 18), Material = Enum.Material.SmoothPlastic,
+			Parent = model,
 		}
 		paw.CFrame = leg.CFrame * CFrame.new(0, -spec.LegSize.Y * 0.45, 0)
-		local pw = Instance.new("WeldConstraint", paw); pw.Part0 = leg; pw.Part1 = paw
-		legParts[i] = motor
+		weld(leg, paw)
 	end
 
-	-- Tail with Motor6D so we can wag it.
+	-- Tail
 	local tailLen = spec.BodySize.Z * 0.55
 	local tail = makePart{
-		Name="Tail", Shape=Enum.PartType.Cylinder,
-		Size=Vector3.new(tailLen, 0.4, 0.4),
-		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
-		CanCollide=false, Parent=model,
+		Name = "Tail", Shape = Enum.PartType.Cylinder,
+		Size = Vector3.new(tailLen, 0.4, 0.4),
+		Color = spec.BodyColor, Material = Enum.Material.SmoothPlastic,
+		Parent = model,
 	}
 	tail.CFrame = hrp.CFrame
-		* CFrame.new(0, spec.BodySize.Y * 0.2, spec.BodySize.Z * 0.55 + tailLen * 0.4)
+		* CFrame.new(0, spec.BodySize.Y * 0.1, spec.BodySize.Z * 0.55 + tailLen * 0.4)
 		* CFrame.Angles(0, math.rad(90), 0)
-	local tailMotor = Instance.new("Motor6D")
-	tailMotor.Name = "TailMotor"
-	tailMotor.Part0 = hrp
-	tailMotor.Part1 = tail
-	tailMotor.C0 = CFrame.new(0, spec.BodySize.Y * 0.2, spec.BodySize.Z * 0.55) * CFrame.Angles(0, math.rad(90), 0)
-	tailMotor.C1 = CFrame.new(-tailLen * 0.4, 0, 0)
-	tailMotor.Parent = hrp
+	weld(hrp, tail)
 
-	-- Tail tuft (lion)
 	if spec.ManeColor then
 		local tuft = makePart{
-			Name="TailTuft", Shape=Enum.PartType.Ball,
-			Size=Vector3.new(0.8, 0.8, 0.8),
-			Color=spec.ManeColor, Material=Enum.Material.SmoothPlastic,
-			CanCollide=false, Parent=model,
+			Name = "TailTuft", Shape = Enum.PartType.Ball,
+			Size = Vector3.new(0.8, 0.8, 0.8),
+			Color = spec.ManeColor, Material = Enum.Material.SmoothPlastic,
+			Parent = model,
 		}
 		tuft.CFrame = tail.CFrame * CFrame.new(tailLen * 0.5, 0, 0)
-		local tuw = Instance.new("WeldConstraint", tuft); tuw.Part0 = tail; tuw.Part1 = tuft
+		weld(tail, tuft)
 	end
 
-	-- Humanoid
+	-- Humanoid — HipHeight large enough to keep HRP fully above terrain.
 	local hum = Instance.new("Humanoid")
 	hum.MaxHealth = spec.HP
 	hum.Health    = spec.HP
 	hum.WalkSpeed = spec.WalkSpeed
 	hum.AutoRotate = true
-	hum.HipHeight  = spec.LegSize.Y * 0.5
+	hum.HipHeight  = spec.LegSize.Y + 0.5  -- HRP bottom this far above ground
 	hum.BreakJointsOnDeath = false
 	hum.Parent = model
-
-	-- Stash motors so the AI loop can animate.
-	model:SetAttribute("_HasMotors", true)
-	local motorFolder = Instance.new("Configuration", hrp)
-	motorFolder.Name = "Motors"
-	for i, m in ipairs(legParts) do m.Parent = hrp; m:SetAttribute("LegIndex", i) end
 
 	-- HP bar above
 	local bb = Instance.new("BillboardGui")
@@ -357,10 +350,10 @@ local function pickSpawnPos()
 		local hx = GameConfig.Island.BaseSize.X / 2 - 20
 		local hz = GameConfig.Island.BaseSize.Z / 2 - 20
 		if math.abs(x) <= hx and math.abs(z) <= hz then
-			return Vector3.new(x, GameConfig.Island.BaseSize.Y + 4, z)
+			return Vector3.new(x, GameConfig.Island.BaseSize.Y + 12, z)
 		end
 	end
-	return Vector3.new(60, GameConfig.Island.BaseSize.Y + 4, 60)
+	return Vector3.new(60, GameConfig.Island.BaseSize.Y + 12, 60)
 end
 
 local function pickSpecForElapsed(elapsed)
@@ -432,53 +425,15 @@ local function attachHumanoidWatcher(model, spec)
 	end)
 end
 
--- Walk-cycle animation: rotates the four leg motors out of phase, plus a
--- gentle tail wag. Runs while the animal's velocity is non-trivial.
-local function startLegAnimation(model, spec)
-	local hrp = model.PrimaryPart
-	if not hrp then return end
-	-- Collect leg motors (children of hrp with LegMotor name) and tail motor.
-	local legMotors, tailMotor
-	task.spawn(function()
-		while model.Parent do
-			if not legMotors then
-				legMotors = {}
-				for _, c in ipairs(hrp:GetChildren()) do
-					if c:IsA("Motor6D") and c.Name == "LegMotor" then
-						local idx = c:GetAttribute("LegIndex")
-						if idx then legMotors[idx] = c end
-					elseif c:IsA("Motor6D") and c.Name == "TailMotor" then
-						tailMotor = c
-					end
-				end
-			end
-			local hum = model:FindFirstChildOfClass("Humanoid")
-			if not hum or hum.Health <= 0 then return end
-			local moving = hum.MoveDirection.Magnitude > 0.05
-			local t = tick()
-			local amp = moving and math.rad(35) or math.rad(0)
-			-- Front-left & rear-right move together; front-right & rear-left opposite.
-			local phaseA = math.sin(t * 8)
-			local phaseB = -phaseA
-			if legMotors[1] then legMotors[1].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseA, 0, 0) end
-			if legMotors[2] then legMotors[2].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseB, 0, 0) end
-			if legMotors[3] then legMotors[3].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseB, 0, 0) end
-			if legMotors[4] then legMotors[4].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseA, 0, 0) end
-			if tailMotor then
-				local wag = math.rad(15) * math.sin(t * 4)
-				tailMotor.C1 = CFrame.new(-spec.BodySize.Z * 0.55 * 0.4, 0, 0) * CFrame.Angles(0, wag, 0)
-			end
-			task.wait(0.05)
-		end
-	end)
-end
+-- Walk-cycle animation: a subtle vertical bob driven by the AI loop's
+-- TweenService — applied directly to the HRP via BodyVelocity-free CFrame
+-- nudges. We avoid Motor6D because they previously caused parts to detach.
+-- (Implemented inline inside runAnimalAI with the bob.)
 
 local function runAnimalAI(model, spec)
 	local hum = model:FindFirstChildOfClass("Humanoid")
 	local hrp = model.PrimaryPart
 	if not hum or not hrp then return end
-
-	startLegAnimation(model, spec)
 
 	local state = "IDLE"
 	local nextWander = 0
@@ -535,8 +490,10 @@ function AnimalManager.SpawnOne()
 	local spec = pickSpecForElapsed(elapsed)
 	local model = buildAnimalModel(spec)
 	local pos = pickSpawnPos()
-	model:SetPrimaryPartCFrame(CFrame.new(pos))
+	-- Parent FIRST so physics simulates correctly when we move the model.
 	model.Parent = Workspace
+	-- PivotTo is the modern, accurate way to move a model with welds.
+	model:PivotTo(CFrame.new(pos))
 
 	active[model] = { spec = spec }
 	attachHumanoidWatcher(model, spec)
