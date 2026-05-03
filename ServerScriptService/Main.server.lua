@@ -53,6 +53,11 @@ local function ensureRemotes()
 	ev("PromptRevive")           -- client -> server { }
 	fn("GetShopState")           -- client <-> server returns { ownsShotgun, ownedSessionWeapons, planeUpgrades, xp }
 
+	-- Best time / personal record
+	ev("UpdateBestTimes")        -- server -> all clients { [userId] = seconds }
+	ev("DeathCountdown")         -- server -> player { secondsLeft, survivedSeconds, bestSeconds, isNewRecord }
+	fn("GetBestTimes")           -- client <-> server returns table of { [userId]=seconds }
+
 	return remotes
 end
 
@@ -113,6 +118,23 @@ Players.PlayerAdded:Connect(function(player)
 		text  = Strings.Notifications.Welcome,
 		color = Color3.fromRGB(255, 220, 120),
 	})
+end)
+
+-- Wire up GetBestTimes RemoteFunction (allowed only after DataManager exists).
+task.spawn(function()
+	while not _G.DataManager do task.wait(0.1) end
+	Remotes.GetBestTimes.OnServerInvoke = function()
+		return _G.DataManager.GetAllBestTimes()
+	end
+end)
+
+-- Broadcast best times whenever a new player joins (so their tag is up to date).
+Players.PlayerAdded:Connect(function(player)
+	task.wait(3)
+	if not player.Parent then return end
+	if _G.DataManager then
+		Remotes.UpdateBestTimes:FireAllClients(_G.DataManager.GetAllBestTimes())
+	end
 end)
 
 print("[Main] Island Survival is running.")

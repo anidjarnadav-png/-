@@ -62,6 +62,15 @@ return {
 		SpectateBtn      = "מעבר לצפייה",
 		LobbyBtn         = "חזרה ללובי",
 		WaitingForRound  = "ממתין לסיום הסבב...",
+		ReturningInSec   = "חוזר ללובי בעוד %d",
+		ReturningSec     = "שניות",
+		SurvivedTime     = "שרדת %s",
+		BestTimeLabel    = "השיא שלך: %s",
+		NewBestTime      = "שיא חדש! %s",
+	},
+	BestTime = {
+		Tag              = "שיא",
+		None             = "אין שיא",
 	},
 	Combat = {
 		Hit              = "פגיעה!",

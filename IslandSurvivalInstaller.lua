@@ -1,18 +1,23 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua
+-- IslandSurvivalInstaller.lua  (v2 — non-destructive)
 -- ====================================================================
 -- Single-script installer for the Island Survival game.
 --
+-- IMPORTANT
+--   This installer is NON-DESTRUCTIVE. It will only replace scripts whose
+--   NAMES match the ones the Island Survival code uses. Any scripts you
+--   added (custom shop, anti-cheat, etc.) with DIFFERENT names will not be
+--   touched.
+--
 -- HOW TO USE
 --   1. Open Roblox Studio.
---   2. File -> New (use the Baseplate template, or any blank place).
---   3. Game Settings -> Security: turn ON "Allow API Services".
---   4. View -> Command Bar to open it (usually at the bottom).
---   5. Paste this ENTIRE script into the Command Bar and press Enter.
---   6. You should see "[Install] Island Survival installed successfully" in the Output.
---   7. Press Play (F5) to test.
+--   2. Game Settings -> Security: turn ON "Allow API Services".
+--   3. View -> Command Bar.
+--   4. Paste this ENTIRE script into the Command Bar and press Enter.
+--   5. Output: "[Install] Island Survival installed successfully".
+--   6. Press Play (F5) to test.
 --
--- The installer is idempotent: running it again replaces the previous install.
+-- The installer is idempotent: re-running it replaces only our 22 scripts.
 -- ====================================================================
 
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
@@ -21,6 +26,9 @@ local StarterGui          = game:GetService("StarterGui")
 local StarterPlayer       = game:GetService("StarterPlayer")
 local StarterPlayerScripts= StarterPlayer:WaitForChild("StarterPlayerScripts")
 
+-- ensure(parent, name, className, source)
+--   Replaces ONLY the script with that exact name in `parent`.
+--   Any other children of `parent` are left untouched.
 local function ensure(parent, name, className, source)
 	local old = parent:FindFirstChild(name)
 	if old then old:Destroy() end
@@ -31,16 +39,10 @@ local function ensure(parent, name, className, source)
 	return inst
 end
 
--- Wipe any old Island Survival or Tycoon scripts.
-for _, container in ipairs({ ReplicatedStorage, ServerScriptService, StarterGui, StarterPlayerScripts }) do
-	for _, c in ipairs(container:GetChildren()) do
-		if c:IsA("Script") or c:IsA("LocalScript") or c:IsA("ModuleScript") then
-			c:Destroy()
-		end
-	end
-end
-local oldRemotes = ReplicatedStorage:FindFirstChild("Remotes")
-if oldRemotes then oldRemotes:Destroy() end
+-- We DO NOT wipe entire containers anymore.  The previous installer used
+-- to clear ReplicatedStorage / ServerScriptService / StarterGui /
+-- StarterPlayerScripts of all scripts before installing — that destroyed
+-- custom user code.  This version only touches the names we created.
 
 local sources = {}
 
@@ -77,6 +79,7 @@ GameConfig.Round = {
 	XPTickInterval         = 1.0,
 	StartingWeapon         = "Stick",
 	StartingHP             = 100,
+	DeathLobbyReturnSec    = 15,    -- after death, players are sent back to the lobby
 }
 
 -- ====== Plane ======
@@ -143,7 +146,7 @@ GameConfig.DamageScale = {
 
 -- ====== DataStore ======
 GameConfig.DataStoreName    = "IslandSurvival_v1"
-GameConfig.DataStoreVersion = 1
+GameConfig.DataStoreVersion = 2
 
 -- ====== Misc ======
 GameConfig.Debug            = false
@@ -217,6 +220,15 @@ return {
 		SpectateBtn      = "מעבר לצפייה",
 		LobbyBtn         = "חזרה ללובי",
 		WaitingForRound  = "ממתין לסיום הסבב...",
+		ReturningInSec   = "חוזר ללובי בעוד %d",
+		ReturningSec     = "שניות",
+		SurvivedTime     = "שרדת %s",
+		BestTimeLabel    = "השיא שלך: %s",
+		NewBestTime      = "שיא חדש! %s",
+	},
+	BestTime = {
+		Tag              = "שיא",
+		None             = "אין שיא",
 	},
 	Combat = {
 		Hit              = "פגיעה!",
@@ -449,7 +461,11 @@ local persistent  = {}  -- [userId] = { OwnsShotgun = bool, Version = N }
 local session     = {}  -- [userId] = { XP=0, OwnedWeapons={Stick=true}, PlaneUpgrades={Speed=0,HP=0}, UsedRevive=false, Alive=false, CurrentWeapon="Stick", DeathCount=0 }
 
 local function blankPersistent()
-	return { OwnsShotgun = false, Version = GameConfig.DataStoreVersion }
+	return {
+		OwnsShotgun = false,
+		BestTime    = 0,                    -- seconds, persistent personal best
+		Version     = GameConfig.DataStoreVersion,
+	}
 end
 
 local function blankSession()
@@ -516,6 +532,31 @@ end
 function DataManager.OwnsShotgun(player)
 	local d = persistent[player.UserId]
 	return d and d.OwnsShotgun or false
+end
+
+function DataManager.GetBestTime(player)
+	local d = persistent[player.UserId]
+	return (d and d.BestTime) or 0
+end
+
+-- Returns true and the new value if a new record was set, otherwise false.
+function DataManager.UpdateBestTime(player, seconds)
+	local d = persistent[player.UserId]
+	if not d then return false end
+	seconds = math.floor(seconds + 0.5)
+	if seconds <= (d.BestTime or 0) then return false end
+	d.BestTime = seconds
+	DataManager.Save(player)
+	return true, seconds
+end
+
+-- Snapshot of all currently-loaded best times keyed by userId.
+function DataManager.GetAllBestTimes()
+	local out = {}
+	for uid, d in pairs(persistent) do
+		out[uid] = d.BestTime or 0
+	end
+	return out
 end
 
 -- ====== Session (in-memory only) ======
@@ -596,8 +637,9 @@ print("[DataManager] Ready.")
 sources.IslandBuilder = [==[
 -- IslandBuilder.server.lua
 -- Place in: ServerScriptService as Script named "IslandBuilder"
--- Builds the island, water, lobby platform, and ready pad. Procedural with a
--- fixed RNG seed so the layout is the same every server run.
+-- Builds a detailed island: real Terrain (grass, sand, rock), varied trees,
+-- clustered rocks, hills, lobby platform, and ready pad. Procedural with a
+-- fixed RNG seed so the layout is identical every server run.
 
 local Workspace        = game:GetService("Workspace")
 local ReplicatedStorage= game:GetService("ReplicatedStorage")
@@ -628,101 +670,174 @@ local function ensureFolder(name, parent)
 	return f
 end
 
--- Returns true if (x,z) is inside crash clearing.
 local function inCrashClear(x, z)
 	local r = GameConfig.Island.CrashClearRadius
 	return (x*x + z*z) <= (r*r)
 end
 
-local function buildBase(parent)
+-- ====== Terrain base ======
+local function clearTerrain()
+	local terrain = Workspace.Terrain
+	-- Clear a generous region so we can lay down a fresh island.
 	local cfg = GameConfig.Island
-	local base = makePart{
-		Name     = "IslandBase",
-		Size     = cfg.BaseSize,
-		Position = Vector3.new(0, cfg.BaseSize.Y/2, 0),
-		Color    = cfg.BaseColor,
-		Material = Enum.Material.Grass,
-		Parent   = parent,
-	}
-	-- Beach ring (rectangular sand strip on edges)
-	local beachThickness = 30
-	local size = cfg.BaseSize
+	local size = Vector3.new(cfg.WaterSize.X + 200, 200, cfg.WaterSize.Z + 200)
+	local region = Region3.new(
+		Vector3.new(-size.X/2, -50, -size.Z/2),
+		Vector3.new( size.X/2, 100,  size.Z/2)
+	):ExpandToGrid(4)
+	terrain:FillRegion(region, 4, Enum.Material.Air)
+end
+
+local function buildTerrainBase()
+	local terrain = Workspace.Terrain
+	local cfg = GameConfig.Island
+	local sx, sy, sz = cfg.BaseSize.X, cfg.BaseSize.Y, cfg.BaseSize.Z
+
+	-- Grass plateau
+	local grassRegion = Region3.new(
+		Vector3.new(-sx/2, 0,    -sz/2),
+		Vector3.new( sx/2, sy + 1, sz/2)
+	):ExpandToGrid(4)
+	terrain:FillRegion(grassRegion, 4, Enum.Material.Grass)
+
+	-- Sand ring (beach) along the perimeter
+	local beachT = 32
 	local strips = {
-		{ Vector3.new(size.X, 1, beachThickness),  Vector3.new(0, size.Y + 0.5,  size.Z/2 - beachThickness/2) },
-		{ Vector3.new(size.X, 1, beachThickness),  Vector3.new(0, size.Y + 0.5, -size.Z/2 + beachThickness/2) },
-		{ Vector3.new(beachThickness, 1, size.Z),  Vector3.new( size.X/2 - beachThickness/2, size.Y + 0.5, 0) },
-		{ Vector3.new(beachThickness, 1, size.Z),  Vector3.new(-size.X/2 + beachThickness/2, size.Y + 0.5, 0) },
+		Region3.new(Vector3.new(-sx/2,         0, -sz/2),         Vector3.new( sx/2, sy + 1, -sz/2 + beachT)),
+		Region3.new(Vector3.new(-sx/2,         0,  sz/2 - beachT),Vector3.new( sx/2, sy + 1,  sz/2)),
+		Region3.new(Vector3.new(-sx/2,         0, -sz/2),         Vector3.new(-sx/2 + beachT, sy + 1, sz/2)),
+		Region3.new(Vector3.new( sx/2 - beachT,0, -sz/2),         Vector3.new( sx/2, sy + 1,  sz/2)),
 	}
-	for _, s in ipairs(strips) do
-		makePart{
-			Name="Beach", Size=s[1], Position=s[2], Color=cfg.BeachColor,
-			Material=Enum.Material.Sand, Parent=parent,
-		}
+	for _, r in ipairs(strips) do
+		terrain:FillRegion(r:ExpandToGrid(4), 4, Enum.Material.Sand)
+	end
+
+	-- Water filling around the island, lower than land.
+	local wsx, wsz = cfg.WaterSize.X, cfg.WaterSize.Z
+	local waterRegion = Region3.new(
+		Vector3.new(-wsx/2, cfg.WaterY - 4, -wsz/2),
+		Vector3.new( wsx/2, cfg.WaterY + 0.5,  wsz/2)
+	):ExpandToGrid(4)
+	terrain:FillRegion(waterRegion, 4, Enum.Material.Water)
+
+	-- Re-fill the island area to clear any water that leaked in.
+	terrain:FillRegion(grassRegion, 4, Enum.Material.Grass)
+	for _, r in ipairs(strips) do
+		terrain:FillRegion(r:ExpandToGrid(4), 4, Enum.Material.Sand)
 	end
 end
 
-local function buildWater(parent)
-	local cfg = GameConfig.Island
-	makePart{
-		Name        = "Water",
-		Size        = cfg.WaterSize,
-		Position    = Vector3.new(0, cfg.WaterY, 0),
-		Color       = cfg.WaterColor,
-		Material    = Enum.Material.Water,
-		Transparency= 0.2,
-		CanCollide  = false,
-		Parent      = parent,
-	}
-end
-
-local function buildHills(parent, rng)
+local function buildTerrainHills(rng)
+	local terrain = Workspace.Terrain
 	local cfg = GameConfig.Island
 	local size = cfg.BaseSize
-	local maxR = math.min(size.X, size.Z) / 2 - 40
+	local maxR = math.min(size.X, size.Z) / 2 - 60
+
 	for i = 1, cfg.NumHills do
 		local angle = rng:NextNumber(0, math.pi * 2)
 		local dist  = rng:NextNumber(80, maxR - 40)
 		local x = math.cos(angle) * dist
 		local z = math.sin(angle) * dist
-		local h = rng:NextNumber(15, 35)
-		local r = rng:NextNumber(25, 50)
+		local r = rng:NextNumber(20, 38)
+		local h = rng:NextNumber(14, 26)
+		-- Stack two FillBalls of different materials for layered look
+		terrain:FillBall(Vector3.new(x, size.Y + h * 0.4, z), r, Enum.Material.Rock)
+		terrain:FillBall(Vector3.new(x, size.Y + h * 0.6, z), r * 0.85, Enum.Material.Grass)
+	end
+end
+
+-- ====== Trees ======
+local function buildPineTree(parent, x, z, rng)
+	local trunkH = rng:NextNumber(10, 14)
+	local trunkR = 0.7
+	local baseY  = GameConfig.Island.BaseSize.Y
+	makePart{
+		Name="Trunk", Shape=Enum.PartType.Cylinder,
+		Size=Vector3.new(trunkH, trunkR*2, trunkR*2),
+		CFrame=CFrame.new(x, baseY + trunkH/2, z) * CFrame.Angles(0, 0, math.pi/2),
+		Color=Color3.fromRGB(85, 55, 30), Material=Enum.Material.Wood,
+		Parent=parent,
+	}
+	-- Triangular foliage stack
+	local topY = baseY + trunkH
+	for i = 0, 3 do
+		local ratio = 1 - i * 0.22
+		local h = 3 - i * 0.4
 		makePart{
-			Name     = "Hill",
-			Shape    = Enum.PartType.Ball,
-			Size     = Vector3.new(r*2, h*2, r*2),
-			Position = Vector3.new(x, size.Y - h*0.5, z),
-			Color    = Color3.fromRGB(70, 120, 60),
-			Material = Enum.Material.Grass,
-			Parent   = parent,
+			Name="Pine", Shape=Enum.PartType.Block,
+			Size=Vector3.new(5 * ratio, h, 5 * ratio),
+			Position=Vector3.new(x, topY + i * 2, z),
+			Color=Color3.fromRGB(20 + rng:NextInteger(0, 20), 90 + rng:NextInteger(0, 30), 50),
+			Material=Enum.Material.LeafyGrass, Parent=parent,
+			Orientation=Vector3.new(0, rng:NextInteger(0, 360), 0),
 		}
 	end
 end
 
-local function buildTree(parent, x, z, rng)
-	local trunkH = rng:NextNumber(8, 14)
-	local trunkR = 1.0
+local function buildOakTree(parent, x, z, rng)
+	local trunkH = rng:NextNumber(8, 13)
+	local trunkR = 1.2
 	local baseY  = GameConfig.Island.BaseSize.Y
-	local trunk = makePart{
-		Name     = "Trunk",
-		Shape    = Enum.PartType.Cylinder,
-		Size     = Vector3.new(trunkH, trunkR*2, trunkR*2),
-		CFrame   = CFrame.new(x, baseY + trunkH/2, z) * CFrame.Angles(0, 0, math.pi/2),
-		Color    = Color3.fromRGB(95, 60, 30),
-		Material = Enum.Material.Wood,
-		Parent   = parent,
+	makePart{
+		Name="Trunk", Shape=Enum.PartType.Cylinder,
+		Size=Vector3.new(trunkH, trunkR*2, trunkR*2),
+		CFrame=CFrame.new(x, baseY + trunkH/2, z) * CFrame.Angles(0, 0, math.pi/2),
+		Color=Color3.fromRGB(95, 60, 30), Material=Enum.Material.Wood,
+		Parent=parent,
 	}
-	local leafR = rng:NextNumber(3, 5)
-	local topY  = baseY + trunkH
-	for i = 1, 3 do
-		local off = Vector3.new(rng:NextNumber(-1.5, 1.5), rng:NextNumber(0, 3), rng:NextNumber(-1.5, 1.5))
+	local topY = baseY + trunkH
+	-- Big leafy crown of overlapping spheres
+	for i = 1, 6 do
+		local off = Vector3.new(rng:NextNumber(-3, 3), rng:NextNumber(-1, 3), rng:NextNumber(-3, 3))
+		local r = rng:NextNumber(3, 5)
 		makePart{
-			Name     = "Leaves",
-			Shape    = Enum.PartType.Ball,
-			Size     = Vector3.new(leafR*2, leafR*2, leafR*2),
-			Position = Vector3.new(x + off.X, topY + off.Y, z + off.Z),
-			Color    = Color3.fromRGB(40 + rng:NextInteger(0,30), 110 + rng:NextInteger(0,30), 40),
-			Material = Enum.Material.Grass,
-			Parent   = parent,
+			Name="Leaves", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(r * 2, r * 2, r * 2),
+			Position=Vector3.new(x + off.X, topY + 1 + off.Y, z + off.Z),
+			Color=Color3.fromRGB(40 + rng:NextInteger(0, 40), 110 + rng:NextInteger(0, 40), 40),
+			Material=Enum.Material.LeafyGrass, Parent=parent,
+		}
+	end
+end
+
+local function buildPalmTree(parent, x, z, rng)
+	local trunkH = rng:NextNumber(12, 18)
+	local trunkR = 0.6
+	local baseY = GameConfig.Island.BaseSize.Y
+	-- Trunk leans slightly
+	local lean = rng:NextNumber(-0.2, 0.2)
+	local trunkCF = CFrame.new(x, baseY + trunkH/2, z)
+		* CFrame.Angles(lean, rng:NextNumber(0, math.pi*2), 0)
+	makePart{
+		Name="Trunk", Shape=Enum.PartType.Cylinder,
+		Size=Vector3.new(trunkH, trunkR*2, trunkR*2),
+		CFrame=trunkCF * CFrame.Angles(0, 0, math.pi/2),
+		Color=Color3.fromRGB(150, 110, 70), Material=Enum.Material.Wood,
+		Parent=parent,
+	}
+	-- Fronds at top
+	local topPos = trunkCF.Position + Vector3.new(0, trunkH/2, 0)
+	for i = 1, 7 do
+		local angle = (i / 7) * math.pi * 2
+		local frond = makePart{
+			Name="Frond", Shape=Enum.PartType.Block,
+			Size=Vector3.new(0.4, 0.6, 7),
+			CFrame=CFrame.new(topPos)
+				* CFrame.Angles(0, angle, math.rad(20))
+				* CFrame.new(0, 0, -3.5),
+			Color=Color3.fromRGB(50 + rng:NextInteger(0,30), 140 + rng:NextInteger(0,30), 60),
+			Material=Enum.Material.LeafyGrass, Parent=parent,
+		}
+	end
+	-- Coconuts
+	for i = 1, rng:NextInteger(2, 4) do
+		local angle = rng:NextNumber(0, math.pi * 2)
+		makePart{
+			Name="Coconut", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(0.7, 0.7, 0.7),
+			Position=topPos + Vector3.new(math.cos(angle) * 0.8, -0.3, math.sin(angle) * 0.8),
+			Color=Color3.fromRGB(80, 50, 30), Material=Enum.Material.SmoothPlastic,
+			Parent=parent,
 		}
 	end
 end
@@ -732,45 +847,84 @@ local function buildTrees(parent, rng)
 	local size = cfg.BaseSize
 	local placed = 0
 	local attempts = 0
-	while placed < cfg.NumTrees and attempts < cfg.NumTrees * 10 do
+	while placed < cfg.NumTrees and attempts < cfg.NumTrees * 12 do
 		attempts = attempts + 1
-		local x = rng:NextNumber(-size.X/2 + 40, size.X/2 - 40)
-		local z = rng:NextNumber(-size.Z/2 + 40, size.Z/2 - 40)
-		if not inCrashClear(x, z) then
-			buildTree(parent, x, z, rng)
-			placed = placed + 1
+		local x = rng:NextNumber(-size.X/2 + 50, size.X/2 - 50)
+		local z = rng:NextNumber(-size.Z/2 + 50, size.Z/2 - 50)
+		if inCrashClear(x, z) then continue end
+		-- Trees on the beach (within ~30 of edge) are palms, otherwise pine/oak.
+		local distFromEdge = math.min(size.X/2 - math.abs(x), size.Z/2 - math.abs(z))
+		local roll = rng:NextNumber()
+		if distFromEdge < 40 then
+			buildPalmTree(parent, x, z, rng)
+		elseif roll < 0.55 then
+			buildPineTree(parent, x, z, rng)
+		else
+			buildOakTree(parent, x, z, rng)
 		end
+		placed = placed + 1
+	end
+end
+
+-- ====== Rocks (clustered) ======
+local function buildRockCluster(parent, cx, cz, rng)
+	local count = rng:NextInteger(2, 5)
+	local baseY = GameConfig.Island.BaseSize.Y
+	for i = 1, count do
+		local off = Vector3.new(rng:NextNumber(-3, 3), 0, rng:NextNumber(-3, 3))
+		local s = rng:NextNumber(2.5, 6.5)
+		makePart{
+			Name="Rock",
+			Shape = (rng:NextNumber() < 0.4) and Enum.PartType.Ball or Enum.PartType.Block,
+			Size=Vector3.new(s, s * rng:NextNumber(0.6, 1.0), s),
+			Position=Vector3.new(cx + off.X, baseY + s * 0.3, cz + off.Z),
+			Color=Color3.fromRGB(110 + rng:NextInteger(0,30), 110 + rng:NextInteger(0,30), 120 + rng:NextInteger(0,20)),
+			Material=Enum.Material.Slate,
+			Orientation=Vector3.new(rng:NextNumber(-25,25), rng:NextNumber(0,360), rng:NextNumber(-25,25)),
+			Parent=parent,
+		}
 	end
 end
 
 local function buildRocks(parent, rng)
 	local cfg = GameConfig.Island
 	local size = cfg.BaseSize
-	for i = 1, cfg.NumRocks do
-		local x = rng:NextNumber(-size.X/2 + 30, size.X/2 - 30)
-		local z = rng:NextNumber(-size.Z/2 + 30, size.Z/2 - 30)
+	local clusters = math.floor(cfg.NumRocks / 3)
+	for i = 1, clusters do
+		local x = rng:NextNumber(-size.X/2 + 40, size.X/2 - 40)
+		local z = rng:NextNumber(-size.Z/2 + 40, size.Z/2 - 40)
 		if inCrashClear(x, z) then
-			-- pull rock outward away from crash zone
+			-- push outward
 			local d = math.sqrt(x*x + z*z)
-			if d < 0.0001 then x, z = 40, 0 else
-				x = x / d * (cfg.CrashClearRadius + 20)
-				z = z / d * (cfg.CrashClearRadius + 20)
+			if d < 0.0001 then x, z = 50, 0 else
+				x = x / d * (cfg.CrashClearRadius + 25)
+				z = z / d * (cfg.CrashClearRadius + 25)
 			end
 		end
-		local s = rng:NextNumber(3, 8)
+		buildRockCluster(parent, x, z, rng)
+	end
+end
+
+-- ====== Bushes (small green parts for ground variety) ======
+local function buildBushes(parent, rng)
+	local cfg = GameConfig.Island
+	local size = cfg.BaseSize
+	for i = 1, 60 do
+		local x = rng:NextNumber(-size.X/2 + 35, size.X/2 - 35)
+		local z = rng:NextNumber(-size.Z/2 + 35, size.Z/2 - 35)
+		if inCrashClear(x, z) then continue end
+		local s = rng:NextNumber(1.2, 2.2)
 		makePart{
-			Name     = "Rock",
-			Shape    = rng:NextNumber() < 0.5 and Enum.PartType.Ball or Enum.PartType.Block,
-			Size     = Vector3.new(s, s*0.8, s),
-			Position = Vector3.new(x, cfg.BaseSize.Y + s*0.3, z),
-			Color    = Color3.fromRGB(120, 120, 130),
-			Material = Enum.Material.Slate,
-			Parent   = parent,
-			Orientation = Vector3.new(rng:NextNumber(-15,15), rng:NextNumber(0,360), rng:NextNumber(-15,15)),
+			Name="Bush", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(s * 2, s, s * 2),
+			Position=Vector3.new(x, cfg.BaseSize.Y + s * 0.3, z),
+			Color=Color3.fromRGB(50 + rng:NextInteger(0,30), 130 + rng:NextInteger(0,40), 50),
+			Material=Enum.Material.LeafyGrass, Parent=parent,
 		}
 	end
 end
 
+-- ====== Lobby ======
 local function buildLobby(parent)
 	local cfg = GameConfig.Lobby
 	local lobbyFolder = Instance.new("Folder")
@@ -785,7 +939,13 @@ local function buildLobby(parent)
 		Material  = Enum.Material.SmoothPlastic,
 		Parent    = lobbyFolder,
 	}
-	-- Wall ring so players don't fall off
+	-- Decorative trim
+	local trim = makePart{
+		Name="Trim", Size=Vector3.new(cfg.PlatformSize.X + 4, 1, cfg.PlatformSize.Z + 4),
+		Position=Vector3.new(0, cfg.SpawnHeight - cfg.PlatformSize.Y/2 - 0.5, 0),
+		Color=Color3.fromRGB(70, 100, 140), Material=Enum.Material.Metal,
+		Parent=lobbyFolder,
+	}
 	local wallH = 6
 	local wallT = 2
 	local s = cfg.PlatformSize
@@ -812,7 +972,6 @@ local function buildLobby(parent)
 		Material  = Enum.Material.Neon,
 		Parent    = lobbyFolder,
 	}
-	-- Floating sign over the pad
 	local sign = Instance.new("BillboardGui")
 	sign.Name = "ReadyLabel"
 	sign.Size = UDim2.new(0, 240, 0, 60)
@@ -832,7 +991,6 @@ local function buildLobby(parent)
 	label.Text = "עלו כאן כדי להתחיל"
 	label.Parent = sign
 
-	-- SpawnLocation in the lobby
 	local existing = Workspace:FindFirstChildWhichIsA("SpawnLocation")
 	if existing then existing:Destroy() end
 	local spawn = Instance.new("SpawnLocation")
@@ -859,11 +1017,16 @@ function IslandBuilder.Build()
 	local world = ensureFolder("IslandWorld", Workspace)
 
 	local rng = Random.new(GameConfig.Island.Seed)
-	buildWater(world)
-	buildBase(world)
-	buildHills(world, rng)
+
+	-- Real Terrain for the ground.
+	pcall(clearTerrain)
+	pcall(buildTerrainBase)
+	pcall(function() buildTerrainHills(rng) end)
+
+	-- Decorative meshes / parts on top of terrain.
 	buildTrees(world, rng)
 	buildRocks(world, rng)
+	buildBushes(world, rng)
 	buildLobby(world)
 
 	-- nice sky/lighting tweak
@@ -878,7 +1041,7 @@ function IslandBuilder.Build()
 	atmos.Haze    = 1.5
 	atmos.Parent  = lighting
 
-	print("[IslandBuilder] World built.")
+	print("[IslandBuilder] World built (Terrain + decoration).")
 	return world
 end
 
@@ -983,11 +1146,31 @@ end
 function RoundManager.OnPlayerDied(player, killedByName)
 	if RoundManager.State ~= "PLAYING" then return end
 	local s = dm().GetSession(player)
+	if not s.Alive then return end -- already processed
 	s.Alive = false
+	s.DeathTime = tick()
+
+	-- Compute survived time and update personal best.
+	local survived = math.max(0, math.floor(s.DeathTime - RoundManager.RoundStartTime + 0.5))
+	local prevBest = dm().GetBestTime(player)
+	local isNewRecord, newBest = dm().UpdateBestTime(player, survived)
+	local bestSeconds = isNewRecord and newBest or prevBest
+
 	getRemotes().PlayerDied:FireClient(player, {
-		killedBy   = killedByName or "סכנה",
-		canRevive  = not s.UsedRevive,
+		killedBy        = killedByName or "סכנה",
+		canRevive       = not s.UsedRevive,
+		survivedSeconds = survived,
+		bestSeconds     = bestSeconds,
+		isNewRecord     = isNewRecord and true or false,
 	})
+
+	-- Broadcast best-times update so everyone's tag refreshes.
+	if isNewRecord then
+		getRemotes().UpdateBestTimes:FireAllClients(dm().GetAllBestTimes())
+	end
+
+	-- Start the 15-second countdown that returns the player to the lobby.
+	RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRecord)
 
 	-- Check if all players are dead.
 	task.delay(0.5, function()
@@ -1002,12 +1185,70 @@ function RoundManager.OnPlayerDied(player, killedByName)
 	end)
 end
 
+-- Counts down on the dead player's screen and teleports them back to the
+-- lobby when the countdown expires (unless they revive first).
+function RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRecord)
+	local s = dm().GetSession(player)
+	-- Kill any prior countdown for this player.
+	if s.DeathTaskId then
+		s.DeathTaskId = nil  -- the prior task will see this and exit
+	end
+	local taskId = {}  -- unique table reference
+	s.DeathTaskId = taskId
+	s.PendingLobbyReturn = true
+
+	task.spawn(function()
+		local total = GameConfig.Round.DeathLobbyReturnSec
+		for left = total, 1, -1 do
+			-- If a different countdown was started or player revived, stop.
+			if s.DeathTaskId ~= taskId then return end
+			if s.Alive then
+				s.PendingLobbyReturn = false
+				return
+			end
+			getRemotes().DeathCountdown:FireClient(player, {
+				secondsLeft     = left,
+				survivedSeconds = survived,
+				bestSeconds     = bestSeconds,
+				isNewRecord     = isNewRecord and true or false,
+				canRevive       = not s.UsedRevive,
+			})
+			task.wait(1)
+		end
+
+		-- Verify still dead and same task; if so, return to lobby.
+		if s.DeathTaskId ~= taskId then return end
+		if s.Alive then return end
+
+		s.PendingLobbyReturn = false
+		s.DeathTaskId = nil
+		-- Send a final tick with secondsLeft=0 so the GUI can fade.
+		getRemotes().DeathCountdown:FireClient(player, {
+			secondsLeft     = 0,
+			survivedSeconds = survived,
+			bestSeconds     = bestSeconds,
+			isNewRecord     = isNewRecord and true or false,
+			canRevive       = false,
+		})
+		-- Respawn back at the lobby spawn (clean, no weapon).
+		player:LoadCharacter()
+		task.wait(0.4)
+		teleportToLobby(player)
+		-- ensure session is reset for spectating until next round
+		s.CurrentWeapon = "Stick"
+		clearTools(player)
+	end)
+end
+
 function RoundManager.RevivePlayer(player)
 	if RoundManager.State ~= "PLAYING" then return false end
 	local s = dm().GetSession(player)
 	if s.UsedRevive then return false end
 	s.UsedRevive = true
 	s.Alive = true
+	-- Cancel any pending death-to-lobby countdown for this player.
+	s.DeathTaskId = nil
+	s.PendingLobbyReturn = false
 
 	-- Respawn at a safe spot (crash position)
 	player:LoadCharacter()
@@ -1104,6 +1345,8 @@ function RoundManager.BeginPlaying(participants)
 		s.Alive = true
 		s.UsedRevive = false
 		s.XP = 0
+		s.DeathTaskId = nil
+		s.PendingLobbyReturn = false
 		-- Give starter weapon
 		if _G.ShopManager and _G.ShopManager.GiveWeapon then
 			_G.ShopManager.GiveWeapon(p, GameConfig.Round.StartingWeapon)
@@ -1333,43 +1576,166 @@ local function makePart(props)
 	return p
 end
 
+local function weldTo(child, parent)
+	local w = Instance.new("WeldConstraint")
+	w.Part0 = parent
+	w.Part1 = child
+	w.Parent = child
+end
+
 local function buildPlaneModel()
 	local model = Instance.new("Model")
 	model.Name = "CrashPlane"
 
-	local body = makePart{
-		Name="Body", Size=Vector3.new(8, 4, 22),
-		Color=GameConfig.Plane.BodyColor, Material=Enum.Material.Metal,
+	local body = GameConfig.Plane.BodyColor
+	local accent = GameConfig.Plane.WingColor
+	local trim = Color3.fromRGB(160, 50, 50)
+
+	-- Fuselage: rounded cylinder lying flat
+	local fuselage = makePart{
+		Name="Fuselage",
+		Shape=Enum.PartType.Cylinder,
+		Size=Vector3.new(28, 5, 5),
+		CFrame=CFrame.new(0, 0, 0) * CFrame.Angles(0, 0, math.rad(90)),
+		Color=body, Material=Enum.Material.Metal,
 		Parent=model,
 	}
+	-- Nose cone
 	local nose = makePart{
-		Name="Nose", Shape=Enum.PartType.Ball, Size=Vector3.new(7,4,7),
-		Color=GameConfig.Plane.BodyColor, Material=Enum.Material.Metal,
+		Name="Nose",
+		Shape=Enum.PartType.Ball,
+		Size=Vector3.new(5, 5, 5),
+		CFrame=CFrame.new(0, 0, -14),
+		Color=body, Material=Enum.Material.Metal,
 		Parent=model,
 	}
-	local tail = makePart{
-		Name="Tail", Size=Vector3.new(1, 4, 6),
-		Color=GameConfig.Plane.BodyColor, Material=Enum.Material.Metal,
+	-- Trim stripe along the side
+	local stripe = makePart{
+		Name="Stripe", Size=Vector3.new(6, 1, 28),
+		CFrame=CFrame.new(0, 0.6, 0),
+		Color=trim, Material=Enum.Material.SmoothPlastic,
 		Parent=model,
 	}
+	-- Cockpit canopy (glass)
+	local canopy = makePart{
+		Name="Canopy",
+		Shape=Enum.PartType.Cylinder,
+		Size=Vector3.new(6, 4, 4.6),
+		CFrame=CFrame.new(0, 2, -8) * CFrame.Angles(0, 0, math.rad(90)),
+		Color=Color3.fromRGB(120, 180, 220),
+		Material=Enum.Material.Glass,
+		Transparency=0.4,
+		Reflectance=0.3,
+		Parent=model,
+	}
+	-- Cockpit window divider
+	local divider = makePart{
+		Name="Divider", Size=Vector3.new(0.4, 4.2, 6.2),
+		CFrame=CFrame.new(0, 2, -8),
+		Color=Color3.fromRGB(60, 60, 70), Material=Enum.Material.Metal,
+		Parent=model,
+	}
+
+	-- Wings (swept slightly back) — main wing
 	local wingL = makePart{
-		Name="WingL", Size=Vector3.new(20, 0.8, 4),
-		Color=GameConfig.Plane.WingColor, Material=Enum.Material.Metal,
+		Name="WingL", Size=Vector3.new(14, 0.7, 5),
+		CFrame=CFrame.new(-9, 0.2, 1) * CFrame.Angles(0, math.rad(8), 0),
+		Color=accent, Material=Enum.Material.Metal,
 		Parent=model,
 	}
 	local wingR = makePart{
-		Name="WingR", Size=Vector3.new(20, 0.8, 4),
-		Color=GameConfig.Plane.WingColor, Material=Enum.Material.Metal,
+		Name="WingR", Size=Vector3.new(14, 0.7, 5),
+		CFrame=CFrame.new( 9, 0.2, 1) * CFrame.Angles(0, math.rad(-8), 0),
+		Color=accent, Material=Enum.Material.Metal,
 		Parent=model,
 	}
-	-- position children relative to body
-	body.CFrame = CFrame.new(0, 0, 0)
-	nose.CFrame = CFrame.new(0, 0, -12)
-	tail.CFrame = CFrame.new(0, 3, 11)
-	wingL.CFrame = CFrame.new(-12, 0.5, 0)
-	wingR.CFrame = CFrame.new( 12, 0.5, 0)
+	-- Winglets at wing tips
+	local wingletL = makePart{
+		Name="WingletL", Size=Vector3.new(0.6, 2.5, 3),
+		CFrame=CFrame.new(-15.5, 1.4, 1.5),
+		Color=trim, Material=Enum.Material.Metal,
+		Parent=model,
+	}
+	local wingletR = makePart{
+		Name="WingletR", Size=Vector3.new(0.6, 2.5, 3),
+		CFrame=CFrame.new( 15.5, 1.4, 1.5),
+		Color=trim, Material=Enum.Material.Metal,
+		Parent=model,
+	}
 
-	model.PrimaryPart = body
+	-- Engines on wings (cylinders) with propellers
+	local function buildEngine(side)
+		local engine = makePart{
+			Name="Engine",
+			Shape=Enum.PartType.Cylinder,
+			Size=Vector3.new(5, 2, 2),
+			CFrame=CFrame.new(side * 6, -0.6, -1) * CFrame.Angles(0, 0, math.rad(90)),
+			Color=Color3.fromRGB(60, 60, 70), Material=Enum.Material.Metal,
+			Parent=model,
+		}
+		-- Propeller (3-blade) — anchored disc that we'll spin via tween or while loop
+		local prop = makePart{
+			Name="Propeller",
+			Shape=Enum.PartType.Cylinder,
+			Size=Vector3.new(0.3, 4, 0.4),
+			CFrame=CFrame.new(side * 6, -0.6, -3.6) * CFrame.Angles(0, 0, 0),
+			Color=Color3.fromRGB(20, 20, 22), Material=Enum.Material.Metal,
+			Parent=model,
+		}
+		prop:SetAttribute("IsProp", true)
+		-- Spinner cone
+		local spinner = makePart{
+			Name="Spinner", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(1.2, 1.2, 1.2),
+			CFrame=CFrame.new(side * 6, -0.6, -3.8),
+			Color=trim, Material=Enum.Material.Metal,
+			Parent=model,
+		}
+		return prop
+	end
+	local propL = buildEngine(-1)
+	local propR = buildEngine( 1)
+
+	-- Tail section
+	local tailFin = makePart{
+		Name="TailFin", Size=Vector3.new(0.6, 5, 5),
+		CFrame=CFrame.new(0, 3, 12),
+		Color=accent, Material=Enum.Material.Metal,
+		Parent=model,
+	}
+	local hStab = makePart{
+		Name="HorizStab", Size=Vector3.new(8, 0.5, 3),
+		CFrame=CFrame.new(0, 1.5, 13),
+		Color=accent, Material=Enum.Material.Metal,
+		Parent=model,
+	}
+	local tailTrim = makePart{
+		Name="TailTrim", Size=Vector3.new(0.7, 1, 5),
+		CFrame=CFrame.new(0, 5.2, 12),
+		Color=trim, Material=Enum.Material.SmoothPlastic,
+		Parent=model,
+	}
+
+	-- Door (left side, rear)
+	local door = makePart{
+		Name="Door", Size=Vector3.new(0.3, 3.5, 2),
+		CFrame=CFrame.new(-2.6, 0.2, 4),
+		Color=trim, Material=Enum.Material.Metal,
+		Parent=model,
+	}
+
+	-- Weld everything to fuselage so the model moves as one when we tween.
+	for _, p in ipairs(model:GetChildren()) do
+		if p ~= fuselage and p:IsA("BasePart") then
+			weldTo(p, fuselage)
+		end
+		if p:IsA("BasePart") then
+			p.Anchored = true
+			p.CanCollide = false
+		end
+	end
+
+	model.PrimaryPart = fuselage
 	return model
 end
 
@@ -1551,11 +1917,13 @@ local function makePart(props)
 	return p
 end
 
--- Build a simple but recognizable animal model.
+-- Build a detailed animal model with per-species touches.
+-- Uses Motor6D welds for legs/tail so we can animate them.
 local function buildAnimalModel(spec)
 	local model = Instance.new("Model")
 	model.Name = spec.Id
 
+	-- Invisible HRP doubles as collision body sized to the visible body.
 	local hrp = makePart{
 		Name="HumanoidRootPart",
 		Size=Vector3.new(spec.BodySize.X, spec.BodySize.Y, spec.BodySize.Z),
@@ -1564,70 +1932,245 @@ local function buildAnimalModel(spec)
 	}
 	model.PrimaryPart = hrp
 
-	-- Body
-	local body = makePart{
-		Name="Body", Size=spec.BodySize, Color=spec.BodyColor,
-		Material=Enum.Material.SmoothPlastic, CanCollide=false, Parent=model,
+	-- Main torso (slightly tapered: chest larger than rear)
+	local chest = makePart{
+		Name="Chest",
+		Shape=Enum.PartType.Block,
+		Size=Vector3.new(spec.BodySize.X * 1.05, spec.BodySize.Y * 1.05, spec.BodySize.Z * 0.55),
+		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
+		CanCollide=false, Parent=model,
 	}
-	local bodyWeld = Instance.new("WeldConstraint", body)
-	body.CFrame = hrp.CFrame
-	bodyWeld.Part0 = hrp
-	bodyWeld.Part1 = body
+	chest.CFrame = hrp.CFrame * CFrame.new(0, 0, -spec.BodySize.Z * 0.18)
+	local cw = Instance.new("WeldConstraint", chest); cw.Part0 = hrp; cw.Part1 = chest
 
-	-- Head
-	local head = makePart{
-		Name="Head", Size=spec.HeadSize, Color=spec.BodyColor,
-		Material=Enum.Material.SmoothPlastic, CanCollide=false, Parent=model,
+	local rear = makePart{
+		Name="Rear",
+		Shape=Enum.PartType.Block,
+		Size=Vector3.new(spec.BodySize.X * 0.92, spec.BodySize.Y * 0.95, spec.BodySize.Z * 0.5),
+		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
+		CanCollide=false, Parent=model,
 	}
-	head.CFrame = hrp.CFrame * CFrame.new(0, spec.BodySize.Y*0.3, -spec.BodySize.Z*0.55)
+	rear.CFrame = hrp.CFrame * CFrame.new(0, -0.05, spec.BodySize.Z * 0.25)
+	local rw = Instance.new("WeldConstraint", rear); rw.Part0 = hrp; rw.Part1 = rear
+
+	-- Neck (cylinder leading to head)
+	local neckLen = math.max(0.6, spec.BodySize.Y * 0.4)
+	local neck = makePart{
+		Name="Neck", Shape=Enum.PartType.Cylinder,
+		Size=Vector3.new(neckLen, spec.BodySize.X * 0.5, spec.BodySize.X * 0.5),
+		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
+		CanCollide=false, Parent=model,
+	}
+	neck.CFrame = hrp.CFrame
+		* CFrame.new(0, spec.BodySize.Y * 0.25, -spec.BodySize.Z * 0.55)
+		* CFrame.Angles(0, 0, math.rad(70))
+	local nw = Instance.new("WeldConstraint", neck); nw.Part0 = hrp; nw.Part1 = neck
+
+	-- Head: shape varies per species
+	local headShape = Enum.PartType.Block
+	if spec.Id == "Bear" or spec.Id == "Lion" then
+		headShape = Enum.PartType.Ball
+	end
+	local head = makePart{
+		Name="Head",
+		Shape = headShape,
+		Size=spec.HeadSize, Color=spec.BodyColor,
+		Material=Enum.Material.SmoothPlastic,
+		CanCollide=false, Parent=model,
+	}
+	head.CFrame = hrp.CFrame * CFrame.new(0, spec.BodySize.Y * 0.5, -spec.BodySize.Z * 0.7)
 	local hw = Instance.new("WeldConstraint", head); hw.Part0 = hrp; hw.Part1 = head
+
+	-- Snout (forward extension of head)
+	local snoutLen = spec.HeadSize.Z * 0.55
+	local snoutColor = spec.Id == "Lion" and Color3.fromRGB(230, 200, 130)
+		or Color3.fromRGB(math.max(spec.BodyColor.R*255 - 30, 0), math.max(spec.BodyColor.G*255 - 30, 0), math.max(spec.BodyColor.B*255 - 30, 0))
+	local snout = makePart{
+		Name="Snout",
+		Shape = (spec.Id == "Wolf") and Enum.PartType.Block or Enum.PartType.Block,
+		Size=Vector3.new(spec.HeadSize.X * 0.65, spec.HeadSize.Y * 0.55, snoutLen),
+		Color=snoutColor, Material=Enum.Material.SmoothPlastic,
+		CanCollide=false, Parent=model,
+	}
+	snout.CFrame = head.CFrame * CFrame.new(0, -spec.HeadSize.Y * 0.1, -(spec.HeadSize.Z * 0.5 + snoutLen * 0.4))
+	local sw = Instance.new("WeldConstraint", snout); sw.Part0 = head; sw.Part1 = snout
+
+	-- Nose tip
+	local nose = makePart{
+		Name="Nose", Shape=Enum.PartType.Ball,
+		Size=Vector3.new(spec.HeadSize.X * 0.28, spec.HeadSize.X * 0.28, spec.HeadSize.X * 0.28),
+		Color=Color3.fromRGB(20, 16, 18), Material=Enum.Material.SmoothPlastic,
+		CanCollide=false, Parent=model,
+	}
+	nose.CFrame = snout.CFrame * CFrame.new(0, 0, -snoutLen * 0.5)
+	local nosew = Instance.new("WeldConstraint", nose); nosew.Part0 = snout; nosew.Part1 = nose
 
 	-- Eyes
 	for _, sx in ipairs({-1, 1}) do
 		local eye = makePart{
-			Name="Eye", Shape=Enum.PartType.Ball, Size=Vector3.new(0.3,0.3,0.3),
+			Name="Eye", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(0.32, 0.32, 0.32),
 			Color=Color3.fromRGB(20,20,20), Material=Enum.Material.SmoothPlastic,
 			CanCollide=false, Parent=model,
 		}
-		eye.CFrame = head.CFrame * CFrame.new(sx*spec.HeadSize.X*0.3, spec.HeadSize.Y*0.2, -spec.HeadSize.Z*0.45)
+		eye.CFrame = head.CFrame * CFrame.new(sx*spec.HeadSize.X*0.32, spec.HeadSize.Y*0.18, -spec.HeadSize.Z*0.45)
 		local ew = Instance.new("WeldConstraint", eye); ew.Part0 = head; ew.Part1 = eye
 	end
 
-	-- Mane (lion only)
+	-- Ears: per-species
+	local function buildEar(side)
+		if spec.Id == "Dog" then
+			-- Floppy down-pointing ears
+			local ear = makePart{
+				Name="Ear", Shape=Enum.PartType.Block,
+				Size=Vector3.new(0.25, spec.HeadSize.Y * 0.6, spec.HeadSize.Z * 0.45),
+				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
+				CanCollide=false, Parent=model,
+			}
+			ear.CFrame = head.CFrame
+				* CFrame.new(side * spec.HeadSize.X * 0.5, 0, 0)
+				* CFrame.Angles(math.rad(-15), 0, math.rad(side * 25))
+			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
+		elseif spec.Id == "Wolf" then
+			-- Pointy upright ears
+			local ear = makePart{
+				Name="Ear", Shape=Enum.PartType.Block,
+				Size=Vector3.new(0.3, spec.HeadSize.Y * 0.7, 0.5),
+				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
+				CanCollide=false, Parent=model,
+			}
+			ear.CFrame = head.CFrame
+				* CFrame.new(side * spec.HeadSize.X * 0.4, spec.HeadSize.Y * 0.55, spec.HeadSize.Z * 0.1)
+				* CFrame.Angles(0, 0, math.rad(side * 20))
+			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
+		elseif spec.Id == "Bear" then
+			-- Small round ears on top
+			local ear = makePart{
+				Name="Ear", Shape=Enum.PartType.Ball,
+				Size=Vector3.new(spec.HeadSize.X * 0.35, spec.HeadSize.X * 0.35, spec.HeadSize.X * 0.35),
+				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
+				CanCollide=false, Parent=model,
+			}
+			ear.CFrame = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.42, spec.HeadSize.Y * 0.45, spec.HeadSize.Z * 0.05)
+			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
+		else
+			-- Lion: tufted small ears
+			local ear = makePart{
+				Name="Ear", Shape=Enum.PartType.Ball,
+				Size=Vector3.new(spec.HeadSize.X * 0.3, spec.HeadSize.X * 0.3, spec.HeadSize.X * 0.3),
+				Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
+				CanCollide=false, Parent=model,
+			}
+			ear.CFrame = head.CFrame * CFrame.new(side * spec.HeadSize.X * 0.5, spec.HeadSize.Y * 0.4, 0)
+			local ew = Instance.new("WeldConstraint", ear); ew.Part0 = head; ew.Part1 = ear
+		end
+	end
+	buildEar(-1); buildEar(1)
+
+	-- Mane (lion: large fluffy ring around the head)
 	if spec.ManeColor then
-		local mane = makePart{
-			Name="Mane", Shape=Enum.PartType.Ball,
-			Size=Vector3.new(spec.HeadSize.X*1.7, spec.HeadSize.Y*1.7, spec.HeadSize.Z*1.7),
+		for i = 1, 6 do
+			local angle = (i / 6) * math.pi * 2
+			local r = spec.HeadSize.X * 1.0
+			local tuft = makePart{
+				Name="ManeTuft", Shape=Enum.PartType.Ball,
+				Size=Vector3.new(spec.HeadSize.X * 0.85, spec.HeadSize.X * 0.85, spec.HeadSize.X * 0.85),
+				Color=spec.ManeColor, Material=Enum.Material.SmoothPlastic,
+				CanCollide=false, Parent=model,
+			}
+			tuft.CFrame = head.CFrame * CFrame.new(math.cos(angle) * r, math.sin(angle) * r * 0.7, spec.HeadSize.Z * 0.15)
+			local tw = Instance.new("WeldConstraint", tuft); tw.Part0 = head; tw.Part1 = tuft
+		end
+		-- Center mass behind head
+		local mass = makePart{
+			Name="ManeMass", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(spec.HeadSize.X * 1.7, spec.HeadSize.Y * 1.5, spec.HeadSize.Z * 1.4),
 			Color=spec.ManeColor, Material=Enum.Material.SmoothPlastic,
 			CanCollide=false, Parent=model,
 		}
-		mane.CFrame = head.CFrame
-		local mw = Instance.new("WeldConstraint", mane); mw.Part0 = head; mw.Part1 = mane
+		mass.CFrame = head.CFrame * CFrame.new(0, 0, spec.HeadSize.Z * 0.2)
+		local mw = Instance.new("WeldConstraint", mass); mw.Part0 = head; mw.Part1 = mass
 	end
 
-	-- Legs
-	for i, off in ipairs({
-		Vector3.new(-spec.BodySize.X*0.3, -spec.BodySize.Y*0.5, -spec.BodySize.Z*0.35),
-		Vector3.new( spec.BodySize.X*0.3, -spec.BodySize.Y*0.5, -spec.BodySize.Z*0.35),
-		Vector3.new(-spec.BodySize.X*0.3, -spec.BodySize.Y*0.5,  spec.BodySize.Z*0.35),
-		Vector3.new( spec.BodySize.X*0.3, -spec.BodySize.Y*0.5,  spec.BodySize.Z*0.35),
-	}) do
-		local leg = makePart{
-			Name="Leg", Size=spec.LegSize, Color=spec.BodyColor,
-			Material=Enum.Material.SmoothPlastic, CanCollide=false, Parent=model,
+	-- Bear belly (chunky)
+	if spec.Id == "Bear" then
+		local belly = makePart{
+			Name="Belly", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(spec.BodySize.X * 1.15, spec.BodySize.Y * 1.1, spec.BodySize.Z * 0.7),
+			Color=Color3.fromRGB(75, 50, 30), Material=Enum.Material.SmoothPlastic,
+			CanCollide=false, Parent=model,
 		}
-		leg.CFrame = hrp.CFrame * CFrame.new(off)
-		local lw = Instance.new("WeldConstraint", leg); lw.Part0 = hrp; lw.Part1 = leg
+		belly.CFrame = hrp.CFrame * CFrame.new(0, -spec.BodySize.Y * 0.15, 0)
+		local bw = Instance.new("WeldConstraint", belly); bw.Part0 = hrp; bw.Part1 = belly
 	end
 
-	-- Tail
+	-- Legs as Motor6D-anchored parts so we can animate the rotation.
+	local legParts = {}
+	local legOffsets = {
+		Vector3.new(-spec.BodySize.X*0.32, -spec.BodySize.Y*0.5, -spec.BodySize.Z*0.32),  -- FL
+		Vector3.new( spec.BodySize.X*0.32, -spec.BodySize.Y*0.5, -spec.BodySize.Z*0.32),  -- FR
+		Vector3.new(-spec.BodySize.X*0.32, -spec.BodySize.Y*0.5,  spec.BodySize.Z*0.32),  -- BL
+		Vector3.new( spec.BodySize.X*0.32, -spec.BodySize.Y*0.5,  spec.BodySize.Z*0.32),  -- BR
+	}
+	for i, off in ipairs(legOffsets) do
+		local leg = makePart{
+			Name = "Leg" .. i, Size = spec.LegSize,
+			Color = spec.BodyColor, Material = Enum.Material.SmoothPlastic,
+			CanCollide = false, Parent = model,
+		}
+		-- attachment-based motor so we can rotate
+		local a0 = Instance.new("Attachment"); a0.Position = off; a0.Parent = hrp
+		local a1 = Instance.new("Attachment"); a1.Position = Vector3.new(0, spec.LegSize.Y * 0.5, 0); a1.Parent = leg
+		leg.CFrame = hrp.CFrame * CFrame.new(off + Vector3.new(0, -spec.LegSize.Y * 0.5, 0))
+		local motor = Instance.new("Motor6D")
+		motor.Name = "LegMotor"
+		motor.Part0 = hrp
+		motor.Part1 = leg
+		motor.C0 = CFrame.new(off)
+		motor.C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0)
+		motor.Parent = hrp
+		-- Paw
+		local paw = makePart{
+			Name="Paw", Shape=Enum.PartType.Block,
+			Size=Vector3.new(spec.LegSize.X * 1.2, spec.LegSize.X * 0.4, spec.LegSize.X * 1.4),
+			Color=Color3.fromRGB(30, 22, 18), Material=Enum.Material.SmoothPlastic,
+			CanCollide=false, Parent=model,
+		}
+		paw.CFrame = leg.CFrame * CFrame.new(0, -spec.LegSize.Y * 0.45, 0)
+		local pw = Instance.new("WeldConstraint", paw); pw.Part0 = leg; pw.Part1 = paw
+		legParts[i] = motor
+	end
+
+	-- Tail with Motor6D so we can wag it.
+	local tailLen = spec.BodySize.Z * 0.55
 	local tail = makePart{
-		Name="Tail", Size=Vector3.new(0.4, 0.4, spec.BodySize.Z*0.4),
+		Name="Tail", Shape=Enum.PartType.Cylinder,
+		Size=Vector3.new(tailLen, 0.4, 0.4),
 		Color=spec.BodyColor, Material=Enum.Material.SmoothPlastic,
 		CanCollide=false, Parent=model,
 	}
-	tail.CFrame = hrp.CFrame * CFrame.new(0, spec.BodySize.Y*0.2, spec.BodySize.Z*0.6)
-	local tw = Instance.new("WeldConstraint", tail); tw.Part0 = hrp; tw.Part1 = tail
+	tail.CFrame = hrp.CFrame
+		* CFrame.new(0, spec.BodySize.Y * 0.2, spec.BodySize.Z * 0.55 + tailLen * 0.4)
+		* CFrame.Angles(0, math.rad(90), 0)
+	local tailMotor = Instance.new("Motor6D")
+	tailMotor.Name = "TailMotor"
+	tailMotor.Part0 = hrp
+	tailMotor.Part1 = tail
+	tailMotor.C0 = CFrame.new(0, spec.BodySize.Y * 0.2, spec.BodySize.Z * 0.55) * CFrame.Angles(0, math.rad(90), 0)
+	tailMotor.C1 = CFrame.new(-tailLen * 0.4, 0, 0)
+	tailMotor.Parent = hrp
+
+	-- Tail tuft (lion)
+	if spec.ManeColor then
+		local tuft = makePart{
+			Name="TailTuft", Shape=Enum.PartType.Ball,
+			Size=Vector3.new(0.8, 0.8, 0.8),
+			Color=spec.ManeColor, Material=Enum.Material.SmoothPlastic,
+			CanCollide=false, Parent=model,
+		}
+		tuft.CFrame = tail.CFrame * CFrame.new(tailLen * 0.5, 0, 0)
+		local tuw = Instance.new("WeldConstraint", tuft); tuw.Part0 = tail; tuw.Part1 = tuft
+	end
 
 	-- Humanoid
 	local hum = Instance.new("Humanoid")
@@ -1638,6 +2181,12 @@ local function buildAnimalModel(spec)
 	hum.HipHeight  = spec.LegSize.Y * 0.5
 	hum.BreakJointsOnDeath = false
 	hum.Parent = model
+
+	-- Stash motors so the AI loop can animate.
+	model:SetAttribute("_HasMotors", true)
+	local motorFolder = Instance.new("Configuration", hrp)
+	motorFolder.Name = "Motors"
+	for i, m in ipairs(legParts) do m.Parent = hrp; m:SetAttribute("LegIndex", i) end
 
 	-- HP bar above
 	local bb = Instance.new("BillboardGui")
@@ -1769,10 +2318,53 @@ local function attachHumanoidWatcher(model, spec)
 	end)
 end
 
+-- Walk-cycle animation: rotates the four leg motors out of phase, plus a
+-- gentle tail wag. Runs while the animal's velocity is non-trivial.
+local function startLegAnimation(model, spec)
+	local hrp = model.PrimaryPart
+	if not hrp then return end
+	-- Collect leg motors (children of hrp with LegMotor name) and tail motor.
+	local legMotors, tailMotor
+	task.spawn(function()
+		while model.Parent do
+			if not legMotors then
+				legMotors = {}
+				for _, c in ipairs(hrp:GetChildren()) do
+					if c:IsA("Motor6D") and c.Name == "LegMotor" then
+						local idx = c:GetAttribute("LegIndex")
+						if idx then legMotors[idx] = c end
+					elseif c:IsA("Motor6D") and c.Name == "TailMotor" then
+						tailMotor = c
+					end
+				end
+			end
+			local hum = model:FindFirstChildOfClass("Humanoid")
+			if not hum or hum.Health <= 0 then return end
+			local moving = hum.MoveDirection.Magnitude > 0.05
+			local t = tick()
+			local amp = moving and math.rad(35) or math.rad(0)
+			-- Front-left & rear-right move together; front-right & rear-left opposite.
+			local phaseA = math.sin(t * 8)
+			local phaseB = -phaseA
+			if legMotors[1] then legMotors[1].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseA, 0, 0) end
+			if legMotors[2] then legMotors[2].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseB, 0, 0) end
+			if legMotors[3] then legMotors[3].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseB, 0, 0) end
+			if legMotors[4] then legMotors[4].C1 = CFrame.new(0, spec.LegSize.Y * 0.5, 0) * CFrame.Angles(amp * phaseA, 0, 0) end
+			if tailMotor then
+				local wag = math.rad(15) * math.sin(t * 4)
+				tailMotor.C1 = CFrame.new(-spec.BodySize.Z * 0.55 * 0.4, 0, 0) * CFrame.Angles(0, wag, 0)
+			end
+			task.wait(0.05)
+		end
+	end)
+end
+
 local function runAnimalAI(model, spec)
 	local hum = model:FindFirstChildOfClass("Humanoid")
 	local hrp = model.PrimaryPart
 	if not hum or not hrp then return end
+
+	startLegAnimation(model, spec)
 
 	local state = "IDLE"
 	local nextWander = 0
@@ -2402,6 +2994,11 @@ local function ensureRemotes()
 	ev("PromptRevive")           -- client -> server { }
 	fn("GetShopState")           -- client <-> server returns { ownsShotgun, ownedSessionWeapons, planeUpgrades, xp }
 
+	-- Best time / personal record
+	ev("UpdateBestTimes")        -- server -> all clients { [userId] = seconds }
+	ev("DeathCountdown")         -- server -> player { secondsLeft, survivedSeconds, bestSeconds, isNewRecord }
+	fn("GetBestTimes")           -- client <-> server returns table of { [userId]=seconds }
+
 	return remotes
 end
 
@@ -2462,6 +3059,23 @@ Players.PlayerAdded:Connect(function(player)
 		text  = Strings.Notifications.Welcome,
 		color = Color3.fromRGB(255, 220, 120),
 	})
+end)
+
+-- Wire up GetBestTimes RemoteFunction (allowed only after DataManager exists).
+task.spawn(function()
+	while not _G.DataManager do task.wait(0.1) end
+	Remotes.GetBestTimes.OnServerInvoke = function()
+		return _G.DataManager.GetAllBestTimes()
+	end
+end)
+
+-- Broadcast best times whenever a new player joins (so their tag is up to date).
+Players.PlayerAdded:Connect(function(player)
+	task.wait(3)
+	if not player.Parent then return end
+	if _G.DataManager then
+		Remotes.UpdateBestTimes:FireAllClients(_G.DataManager.GetAllBestTimes())
+	end
 end)
 
 print("[Main] Island Survival is running.")
@@ -3122,10 +3736,13 @@ end)
 sources.DeathGui = [==[
 -- DeathGui.lua
 -- Place in: StarterGui as LocalScript named "DeathGui"
--- Death overlay with revive (Robux) button.
+-- Dramatic death overlay: 15-second countdown, revive button, survived stats,
+-- personal best display.
 
 local Players          = game:GetService("Players")
 local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local TweenService     = game:GetService("TweenService")
+local RunService       = game:GetService("RunService")
 
 local Strings = require(ReplicatedStorage:WaitForChild("Strings"))
 
@@ -3137,95 +3754,294 @@ local screen = Instance.new("ScreenGui")
 screen.Name = "DeathGui"
 screen.ResetOnSpawn = false
 screen.IgnoreGuiInset = true
+screen.DisplayOrder = 50
 screen.Parent = pg
 
-local function corner(p, r) local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, r or 8); c.Parent = p; return c end
-local function stroke(p, c, t) local s = Instance.new("UIStroke"); s.Color = c; s.Thickness = t or 1; s.Parent = p; return s end
+local function corner(p, r)
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, r or 8)
+	c.Parent = p
+	return c
+end
+local function stroke(p, color, thick)
+	local s = Instance.new("UIStroke")
+	s.Color = color or Color3.fromRGB(0,0,0)
+	s.Thickness = thick or 1
+	s.Parent = p
+	return s
+end
+local function fmtTime(sec)
+	sec = math.max(0, math.floor(sec or 0))
+	return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
+end
 
+-- Vignette / red gradient backdrop
 local backdrop = Instance.new("Frame", screen)
 backdrop.Size = UDim2.new(1, 0, 1, 0)
-backdrop.BackgroundColor3 = Color3.fromRGB(40, 0, 0)
+backdrop.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 backdrop.BackgroundTransparency = 0.45
 backdrop.BorderSizePixel = 0
 backdrop.Visible = false
 
-local panel = Instance.new("Frame", backdrop)
-panel.AnchorPoint = Vector2.new(0.5, 0.5)
-panel.Position = UDim2.new(0.5, 0, 0.5, 0)
-panel.Size = UDim2.new(0, 460, 0, 280)
-panel.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
-panel.BorderSizePixel = 0
-corner(panel, 14)
-stroke(panel, Color3.fromRGB(220, 80, 60), 3)
+local vignette = Instance.new("UIGradient", backdrop)
+vignette.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 0, 0)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(20, 0, 0)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(80, 0, 0)),
+})
+vignette.Rotation = 90
 
-local title = Instance.new("TextLabel", panel)
+-- Main card
+local card = Instance.new("Frame", backdrop)
+card.AnchorPoint = Vector2.new(0.5, 0.5)
+card.Position = UDim2.new(0.5, 0, 0.5, 0)
+card.Size = UDim2.new(0, 540, 0, 460)
+card.BackgroundColor3 = Color3.fromRGB(22, 24, 30)
+card.BorderSizePixel = 0
+corner(card, 18)
+stroke(card, Color3.fromRGB(220, 60, 60), 4)
+
+local cardGradient = Instance.new("UIGradient", card)
+cardGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(40, 18, 22)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(18, 14, 18)),
+})
+cardGradient.Rotation = 90
+
+-- Title "מתת" with shadow
+local titleShadow = Instance.new("TextLabel", card)
+titleShadow.BackgroundTransparency = 1
+titleShadow.Position = UDim2.new(0, 14, 0, 22)
+titleShadow.Size = UDim2.new(1, -28, 0, 64)
+titleShadow.Font = Enum.Font.GothamBlack
+titleShadow.TextColor3 = Color3.fromRGB(120, 20, 20)
+titleShadow.TextStrokeTransparency = 0.3
+titleShadow.TextScaled = true
+titleShadow.Text = Strings.Death.Title
+titleShadow.ZIndex = 1
+titleShadow.TextTransparency = 0.5
+
+local title = Instance.new("TextLabel", card)
 title.BackgroundTransparency = 1
-title.Position = UDim2.new(0, 12, 0, 12)
-title.Size = UDim2.new(1, -24, 0, 50)
+title.Position = UDim2.new(0, 12, 0, 18)
+title.Size = UDim2.new(1, -24, 0, 64)
 title.Font = Enum.Font.GothamBlack
-title.TextColor3 = Color3.fromRGB(255, 70, 70)
+title.TextColor3 = Color3.fromRGB(255, 80, 80)
+title.TextStrokeTransparency = 0
+title.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
 title.TextScaled = true
 title.Text = Strings.Death.Title
+title.ZIndex = 2
 
-local sub = Instance.new("TextLabel", panel)
-sub.BackgroundTransparency = 1
-sub.Position = UDim2.new(0, 12, 0, 64)
-sub.Size = UDim2.new(1, -24, 0, 30)
-sub.Font = Enum.Font.Gotham
-sub.TextColor3 = Color3.fromRGB(220, 220, 220)
-sub.TextScaled = true
-sub.Text = ""
+-- Killed-by sub
+local killedBy = Instance.new("TextLabel", card)
+killedBy.BackgroundTransparency = 1
+killedBy.Position = UDim2.new(0, 12, 0, 90)
+killedBy.Size = UDim2.new(1, -24, 0, 28)
+killedBy.Font = Enum.Font.Gotham
+killedBy.TextColor3 = Color3.fromRGB(220, 220, 220)
+killedBy.TextScaled = true
+killedBy.Text = ""
 
-local reviveBtn = Instance.new("TextButton", panel)
+-- Survived time + best (centered row)
+local statsFrame = Instance.new("Frame", card)
+statsFrame.BackgroundTransparency = 1
+statsFrame.Position = UDim2.new(0, 16, 0, 124)
+statsFrame.Size = UDim2.new(1, -32, 0, 60)
+local statsLayout = Instance.new("UIListLayout", statsFrame)
+statsLayout.FillDirection = Enum.FillDirection.Horizontal
+statsLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+statsLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+statsLayout.SortOrder = Enum.SortOrder.LayoutOrder
+statsLayout.Padding = UDim.new(0, 16)
+
+local function makeStat(parent, headerText, valueText, valueColor)
+	local box = Instance.new("Frame", parent)
+	box.BackgroundColor3 = Color3.fromRGB(34, 38, 46)
+	box.BorderSizePixel = 0
+	box.Size = UDim2.new(0, 220, 0, 60)
+	corner(box, 10)
+	stroke(box, Color3.fromRGB(60, 65, 80), 1)
+	local h = Instance.new("TextLabel", box)
+	h.BackgroundTransparency = 1
+	h.Position = UDim2.new(0, 6, 0, 4)
+	h.Size = UDim2.new(1, -12, 0, 18)
+	h.Font = Enum.Font.Gotham
+	h.TextColor3 = Color3.fromRGB(160, 170, 190)
+	h.TextScaled = true
+	h.Text = headerText
+	local v = Instance.new("TextLabel", box)
+	v.BackgroundTransparency = 1
+	v.Position = UDim2.new(0, 6, 0, 24)
+	v.Size = UDim2.new(1, -12, 0, 32)
+	v.Font = Enum.Font.GothamBold
+	v.TextColor3 = valueColor or Color3.fromRGB(255, 255, 255)
+	v.TextScaled = true
+	v.Text = valueText
+	return box, v
+end
+
+local _, survivedValue = makeStat(statsFrame, "שרדת", "0:00", Color3.fromRGB(255, 220, 120))
+local _, bestValue     = makeStat(statsFrame, "שיא אישי", "0:00", Color3.fromRGB(120, 220, 255))
+
+-- Big countdown number
+local countLabel = Instance.new("TextLabel", card)
+countLabel.BackgroundTransparency = 1
+countLabel.Position = UDim2.new(0, 12, 0, 196)
+countLabel.Size = UDim2.new(1, -24, 0, 110)
+countLabel.Font = Enum.Font.GothamBlack
+countLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+countLabel.TextStrokeTransparency = 0
+countLabel.TextScaled = true
+countLabel.Text = "15"
+
+local countSub = Instance.new("TextLabel", card)
+countSub.BackgroundTransparency = 1
+countSub.Position = UDim2.new(0, 12, 0, 304)
+countSub.Size = UDim2.new(1, -24, 0, 22)
+countSub.Font = Enum.Font.Gotham
+countSub.TextColor3 = Color3.fromRGB(180, 180, 180)
+countSub.TextScaled = true
+countSub.Text = string.format(Strings.Death.ReturningInSec, 15) .. " " .. Strings.Death.ReturningSec
+
+-- Revive button
+local reviveBtn = Instance.new("TextButton", card)
 reviveBtn.AnchorPoint = Vector2.new(0.5, 0)
-reviveBtn.Position = UDim2.new(0.5, 0, 0, 110)
-reviveBtn.Size = UDim2.new(0, 360, 0, 60)
+reviveBtn.Position = UDim2.new(0.5, 0, 0, 340)
+reviveBtn.Size = UDim2.new(0, 460, 0, 60)
 reviveBtn.BackgroundColor3 = Color3.fromRGB(255, 180, 60)
 reviveBtn.Font = Enum.Font.GothamBold
 reviveBtn.TextColor3 = Color3.fromRGB(40, 30, 0)
 reviveBtn.TextScaled = true
 reviveBtn.Text = Strings.Death.ReviveBtn
-corner(reviveBtn, 10)
+corner(reviveBtn, 12)
+stroke(reviveBtn, Color3.fromRGB(180, 120, 30), 2)
 
-local spectateBtn = Instance.new("TextButton", panel)
-spectateBtn.AnchorPoint = Vector2.new(0.5, 0)
-spectateBtn.Position = UDim2.new(0.5, 0, 0, 180)
-spectateBtn.Size = UDim2.new(0, 360, 0, 50)
-spectateBtn.BackgroundColor3 = Color3.fromRGB(60, 70, 90)
-spectateBtn.Font = Enum.Font.Gotham
-spectateBtn.TextColor3 = Color3.fromRGB(220, 220, 220)
-spectateBtn.TextScaled = true
-spectateBtn.Text = Strings.Death.SpectateBtn
-corner(spectateBtn, 8)
+-- New record badge (hidden until earned)
+local recordBadge = Instance.new("TextLabel", card)
+recordBadge.AnchorPoint = Vector2.new(0.5, 0)
+recordBadge.Position = UDim2.new(0.5, 0, 0, 410)
+recordBadge.Size = UDim2.new(0, 380, 0, 38)
+recordBadge.BackgroundColor3 = Color3.fromRGB(255, 220, 80)
+recordBadge.BackgroundTransparency = 0.1
+recordBadge.Font = Enum.Font.GothamBlack
+recordBadge.TextColor3 = Color3.fromRGB(40, 30, 0)
+recordBadge.TextScaled = true
+recordBadge.Text = ""
+recordBadge.Visible = false
+corner(recordBadge, 8)
+stroke(recordBadge, Color3.fromRGB(180, 140, 30), 2)
+
+-- ====== Animation ======
+local function showDeath()
+	backdrop.Visible = true
+	card.Position = UDim2.new(0.5, 0, 0.4, 0)
+	card.Size = UDim2.new(0, 460, 0, 380)
+	backdrop.BackgroundTransparency = 1
+	TweenService:Create(backdrop, TweenInfo.new(0.4), { BackgroundTransparency = 0.45 }):Play()
+	TweenService:Create(card, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+		Position = UDim2.new(0.5, 0, 0.5, 0),
+		Size = UDim2.new(0, 540, 0, 460),
+	}):Play()
+end
+local function hideDeath()
+	TweenService:Create(backdrop, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
+	task.wait(0.3)
+	backdrop.Visible = false
+end
 
 reviveBtn.MouseButton1Click:Connect(function()
 	Remotes.PromptRevive:FireServer()
 end)
-spectateBtn.MouseButton1Click:Connect(function()
-	backdrop.Visible = false
-end)
 
+-- Pulse the count label
+local pulsing = false
+local function startPulse()
+	if pulsing then return end
+	pulsing = true
+	task.spawn(function()
+		while pulsing and backdrop.Visible do
+			TweenService:Create(countLabel, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+				TextTransparency = 0.2,
+			}):Play()
+			task.wait(0.4)
+			TweenService:Create(countLabel, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In), {
+				TextTransparency = 0,
+			}):Play()
+			task.wait(0.6)
+		end
+	end)
+end
+local function stopPulse() pulsing = false end
+
+-- ====== Events ======
 Remotes.PlayerDied.OnClientEvent:Connect(function(payload)
 	payload = payload or {}
-	sub.Text = string.format(Strings.Death.KilledBy, payload.killedBy or "סכנה")
+	killedBy.Text = string.format(Strings.Death.KilledBy, payload.killedBy or "סכנה")
+	survivedValue.Text = fmtTime(payload.survivedSeconds or 0)
+	bestValue.Text     = fmtTime(payload.bestSeconds or 0)
 	if payload.canRevive then
 		reviveBtn.Visible = true
 		reviveBtn.Text = Strings.Death.ReviveBtn
 	else
 		reviveBtn.Visible = false
 	end
-	backdrop.Visible = true
+	if payload.isNewRecord then
+		recordBadge.Visible = true
+		recordBadge.Text = string.format(Strings.Death.NewBestTime, fmtTime(payload.bestSeconds or 0))
+	else
+		recordBadge.Visible = false
+	end
+	countLabel.Text = "15"
+	countSub.Text = string.format(Strings.Death.ReturningInSec, 15) .. " " .. Strings.Death.ReturningSec
+	showDeath()
+	startPulse()
+end)
+
+Remotes.DeathCountdown.OnClientEvent:Connect(function(payload)
+	if not payload then return end
+	if not backdrop.Visible then
+		showDeath()
+		startPulse()
+	end
+	survivedValue.Text = fmtTime(payload.survivedSeconds or 0)
+	bestValue.Text     = fmtTime(payload.bestSeconds or 0)
+
+	local left = payload.secondsLeft or 0
+	if left > 0 then
+		countLabel.Text = tostring(left)
+		countSub.Text = string.format(Strings.Death.ReturningInSec, left) .. " " .. Strings.Death.ReturningSec
+		-- Color shifts from yellow -> orange -> red as time runs out
+		if left <= 5 then
+			countLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+		elseif left <= 10 then
+			countLabel.TextColor3 = Color3.fromRGB(255, 180, 80)
+		else
+			countLabel.TextColor3 = Color3.fromRGB(255, 240, 200)
+		end
+		reviveBtn.Visible = payload.canRevive == true
+	else
+		stopPulse()
+		hideDeath()
+	end
+
+	if payload.isNewRecord then
+		recordBadge.Visible = true
+		recordBadge.Text = string.format(Strings.Death.NewBestTime, fmtTime(payload.bestSeconds or 0))
+	end
 end)
 
 -- Hide on respawn / state changes
 Remotes.RoundStateChanged.OnClientEvent:Connect(function(data)
 	if data and (data.state == "LOBBY" or data.state == "ENDING") then
-		backdrop.Visible = false
+		stopPulse()
+		hideDeath()
 	end
 end)
 Remotes.UpdateHUD.OnClientEvent:Connect(function(state)
 	if state and state.alive then
-		backdrop.Visible = false
+		stopPulse()
+		hideDeath()
 	end
 end)
 
@@ -3565,36 +4381,170 @@ Remotes.CrashEffect.OnClientEvent:Connect(function() shake(2.0) end)
 
 ]==]
 
+sources.PlayerTagsClient = [==[
+-- PlayerTagsClient.lua
+-- Place in: StarterPlayerScripts as LocalScript named "PlayerTagsClient"
+-- Renders a "שיא: M:SS" BillboardGui above each player's head, including the
+-- local player. Listens to UpdateBestTimes for live updates.
+
+local Players          = game:GetService("Players")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+
+local Strings = require(ReplicatedStorage:WaitForChild("Strings"))
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local TAG_NAME = "BestTimeTag"
+
+local bestTimes = {}  -- [userId] = seconds
+
+local function fmtTime(sec)
+	sec = math.max(0, math.floor(sec or 0))
+	return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
+end
+
+local function formatTagText(seconds)
+	if not seconds or seconds <= 0 then
+		return Strings.BestTime.Tag .. ": " .. Strings.BestTime.None
+	end
+	return Strings.BestTime.Tag .. ": " .. fmtTime(seconds)
+end
+
+local function buildTag(character)
+	local head = character:FindFirstChild("Head")
+	if not head then return nil end
+	local existing = head:FindFirstChild(TAG_NAME)
+	if existing then return existing end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = TAG_NAME
+	bb.Adornee = head
+	bb.Size = UDim2.new(0, 180, 0, 36)
+	bb.StudsOffset = Vector3.new(0, 3, 0)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.MaxDistance = 120
+	bb.Parent = head
+
+	local frame = Instance.new("Frame", bb)
+	frame.Size = UDim2.new(1, 0, 1, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(28, 32, 40)
+	frame.BackgroundTransparency = 0.25
+	frame.BorderSizePixel = 0
+	local c = Instance.new("UICorner", frame); c.CornerRadius = UDim.new(0, 8)
+	local s = Instance.new("UIStroke", frame); s.Color = Color3.fromRGB(120, 200, 255); s.Thickness = 1.5
+
+	local label = Instance.new("TextLabel", frame)
+	label.Name = "Label"
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1, -8, 1, 0)
+	label.Position = UDim2.new(0, 4, 0, 0)
+	label.Font = Enum.Font.GothamBold
+	label.TextColor3 = Color3.fromRGB(180, 220, 255)
+	label.TextStrokeTransparency = 0
+	label.TextScaled = true
+	label.Text = formatTagText(0)
+	return bb
+end
+
+local function refreshTagFor(player)
+	local char = player.Character
+	if not char then return end
+	local bb = buildTag(char)
+	if not bb then return end
+	local frame = bb:FindFirstChildWhichIsA("Frame")
+	if not frame then return end
+	local label = frame:FindFirstChild("Label")
+	if not label then return end
+	label.Text = formatTagText(bestTimes[player.UserId])
+end
+
+local function refreshAll()
+	for _, p in ipairs(Players:GetPlayers()) do
+		refreshTagFor(p)
+	end
+end
+
+local function attachToCharacter(player)
+	local char = player.Character
+	if not char then return end
+	-- Wait for head, then build the tag once.
+	task.spawn(function()
+		local head = char:WaitForChild("Head", 5)
+		if head then
+			refreshTagFor(player)
+		end
+	end)
+end
+
+-- Hook player events
+local function onPlayer(p)
+	if p.Character then attachToCharacter(p) end
+	p.CharacterAdded:Connect(function() attachToCharacter(p) end)
+end
+for _, p in ipairs(Players:GetPlayers()) do onPlayer(p) end
+Players.PlayerAdded:Connect(onPlayer)
+
+-- Listen for live updates
+Remotes.UpdateBestTimes.OnClientEvent:Connect(function(payload)
+	if type(payload) ~= "table" then return end
+	for k, v in pairs(payload) do
+		bestTimes[tonumber(k) or k] = v
+	end
+	refreshAll()
+end)
+
+-- Initial fetch
+task.spawn(function()
+	local ok, snapshot = pcall(function()
+		return Remotes.GetBestTimes:InvokeServer()
+	end)
+	if ok and type(snapshot) == "table" then
+		for k, v in pairs(snapshot) do
+			bestTimes[tonumber(k) or k] = v
+		end
+		refreshAll()
+	end
+end)
+
+]==]
+
 
 -- ====================================================================
--- INSTALL ALL SCRIPTS
+-- INSTALL ALL SCRIPTS  (only those listed here are touched)
 -- ====================================================================
 
-ensure(ReplicatedStorage, "GameConfig",   "ModuleScript", sources.GameConfig)
-ensure(ReplicatedStorage, "Strings",      "ModuleScript", sources.Strings)
-ensure(ReplicatedStorage, "WeaponConfig", "ModuleScript", sources.WeaponConfig)
-ensure(ReplicatedStorage, "AnimalConfig", "ModuleScript", sources.AnimalConfig)
+local installed = {}
+local function track(parent, name, className, src)
+	ensure(parent, name, className, src)
+	table.insert(installed, name)
+end
 
-ensure(ServerScriptService, "DataManager",     "Script", sources.DataManager)
-ensure(ServerScriptService, "IslandBuilder",   "Script", sources.IslandBuilder)
-ensure(ServerScriptService, "RoundManager",    "Script", sources.RoundManager)
-ensure(ServerScriptService, "LobbyManager",    "Script", sources.LobbyManager)
-ensure(ServerScriptService, "PlaneManager",    "Script", sources.PlaneManager)
-ensure(ServerScriptService, "AnimalManager",   "Script", sources.AnimalManager)
-ensure(ServerScriptService, "CombatManager",   "Script", sources.CombatManager)
-ensure(ServerScriptService, "ShopManager",     "Script", sources.ShopManager)
-ensure(ServerScriptService, "ProductHandler",  "Script", sources.ProductHandler)
-ensure(ServerScriptService, "Main",            "Script", sources.Main)
+track(ReplicatedStorage, "GameConfig",   "ModuleScript", sources.GameConfig)
+track(ReplicatedStorage, "Strings",      "ModuleScript", sources.Strings)
+track(ReplicatedStorage, "WeaponConfig", "ModuleScript", sources.WeaponConfig)
+track(ReplicatedStorage, "AnimalConfig", "ModuleScript", sources.AnimalConfig)
 
-ensure(StarterGui, "HUDGui",          "LocalScript", sources.HUDGui)
-ensure(StarterGui, "LobbyGui",        "LocalScript", sources.LobbyGui)
-ensure(StarterGui, "ShopGui",         "LocalScript", sources.ShopGui)
-ensure(StarterGui, "DeathGui",        "LocalScript", sources.DeathGui)
-ensure(StarterGui, "NotificationGui", "LocalScript", sources.NotificationGui)
+track(ServerScriptService, "DataManager",     "Script", sources.DataManager)
+track(ServerScriptService, "IslandBuilder",   "Script", sources.IslandBuilder)
+track(ServerScriptService, "RoundManager",    "Script", sources.RoundManager)
+track(ServerScriptService, "LobbyManager",    "Script", sources.LobbyManager)
+track(ServerScriptService, "PlaneManager",    "Script", sources.PlaneManager)
+track(ServerScriptService, "AnimalManager",   "Script", sources.AnimalManager)
+track(ServerScriptService, "CombatManager",   "Script", sources.CombatManager)
+track(ServerScriptService, "ShopManager",     "Script", sources.ShopManager)
+track(ServerScriptService, "ProductHandler",  "Script", sources.ProductHandler)
+track(ServerScriptService, "Main",            "Script", sources.Main)
 
-ensure(StarterPlayerScripts, "ClientCombat",   "LocalScript", sources.ClientCombat)
-ensure(StarterPlayerScripts, "EffectsClient",  "LocalScript", sources.EffectsClient)
-ensure(StarterPlayerScripts, "CameraClient",   "LocalScript", sources.CameraClient)
+track(StarterGui, "HUDGui",          "LocalScript", sources.HUDGui)
+track(StarterGui, "LobbyGui",        "LocalScript", sources.LobbyGui)
+track(StarterGui, "ShopGui",         "LocalScript", sources.ShopGui)
+track(StarterGui, "DeathGui",        "LocalScript", sources.DeathGui)
+track(StarterGui, "NotificationGui", "LocalScript", sources.NotificationGui)
+
+track(StarterPlayerScripts, "ClientCombat",     "LocalScript", sources.ClientCombat)
+track(StarterPlayerScripts, "EffectsClient",    "LocalScript", sources.EffectsClient)
+track(StarterPlayerScripts, "CameraClient",     "LocalScript", sources.CameraClient)
+track(StarterPlayerScripts, "PlayerTagsClient", "LocalScript", sources.PlayerTagsClient)
 
 local Lighting = game:GetService("Lighting")
 Lighting.ClockTime = 14
@@ -3606,6 +4556,8 @@ end)
 
 print("==============================================================")
 print("[Install] Island Survival installed successfully")
+print(string.format("[Install] %d scripts replaced (all other scripts left untouched)", #installed))
+for _, n in ipairs(installed) do print("    -", n) end
 print("[Install] Press Play (F5) to test.")
 print("[Install] Make sure 'Allow API Services' is ON in Game Settings -> Security.")
 print("==============================================================")

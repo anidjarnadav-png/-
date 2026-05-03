@@ -16,7 +16,11 @@ local persistent  = {}  -- [userId] = { OwnsShotgun = bool, Version = N }
 local session     = {}  -- [userId] = { XP=0, OwnedWeapons={Stick=true}, PlaneUpgrades={Speed=0,HP=0}, UsedRevive=false, Alive=false, CurrentWeapon="Stick", DeathCount=0 }
 
 local function blankPersistent()
-	return { OwnsShotgun = false, Version = GameConfig.DataStoreVersion }
+	return {
+		OwnsShotgun = false,
+		BestTime    = 0,                    -- seconds, persistent personal best
+		Version     = GameConfig.DataStoreVersion,
+	}
 end
 
 local function blankSession()
@@ -83,6 +87,31 @@ end
 function DataManager.OwnsShotgun(player)
 	local d = persistent[player.UserId]
 	return d and d.OwnsShotgun or false
+end
+
+function DataManager.GetBestTime(player)
+	local d = persistent[player.UserId]
+	return (d and d.BestTime) or 0
+end
+
+-- Returns true and the new value if a new record was set, otherwise false.
+function DataManager.UpdateBestTime(player, seconds)
+	local d = persistent[player.UserId]
+	if not d then return false end
+	seconds = math.floor(seconds + 0.5)
+	if seconds <= (d.BestTime or 0) then return false end
+	d.BestTime = seconds
+	DataManager.Save(player)
+	return true, seconds
+end
+
+-- Snapshot of all currently-loaded best times keyed by userId.
+function DataManager.GetAllBestTimes()
+	local out = {}
+	for uid, d in pairs(persistent) do
+		out[uid] = d.BestTime or 0
+	end
+	return out
 end
 
 -- ====== Session (in-memory only) ======

@@ -30,6 +30,7 @@ GameConfig.Round = {
 	XPTickInterval         = 1.0,
 	StartingWeapon         = "Stick",
 	StartingHP             = 100,
+	DeathLobbyReturnSec    = 15,    -- after death, players are sent back to the lobby
 }
 
 -- ====== Plane ======
@@ -96,7 +97,7 @@ GameConfig.DamageScale = {
 
 -- ====== DataStore ======
 GameConfig.DataStoreName    = "IslandSurvival_v1"
-GameConfig.DataStoreVersion = 1
+GameConfig.DataStoreVersion = 2
 
 -- ====== Misc ======
 GameConfig.Debug            = false

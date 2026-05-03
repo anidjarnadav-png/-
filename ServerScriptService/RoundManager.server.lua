@@ -93,11 +93,31 @@ end
 function RoundManager.OnPlayerDied(player, killedByName)
 	if RoundManager.State ~= "PLAYING" then return end
 	local s = dm().GetSession(player)
+	if not s.Alive then return end -- already processed
 	s.Alive = false
+	s.DeathTime = tick()
+
+	-- Compute survived time and update personal best.
+	local survived = math.max(0, math.floor(s.DeathTime - RoundManager.RoundStartTime + 0.5))
+	local prevBest = dm().GetBestTime(player)
+	local isNewRecord, newBest = dm().UpdateBestTime(player, survived)
+	local bestSeconds = isNewRecord and newBest or prevBest
+
 	getRemotes().PlayerDied:FireClient(player, {
-		killedBy   = killedByName or "סכנה",
-		canRevive  = not s.UsedRevive,
+		killedBy        = killedByName or "סכנה",
+		canRevive       = not s.UsedRevive,
+		survivedSeconds = survived,
+		bestSeconds     = bestSeconds,
+		isNewRecord     = isNewRecord and true or false,
 	})
+
+	-- Broadcast best-times update so everyone's tag refreshes.
+	if isNewRecord then
+		getRemotes().UpdateBestTimes:FireAllClients(dm().GetAllBestTimes())
+	end
+
+	-- Start the 15-second countdown that returns the player to the lobby.
+	RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRecord)
 
 	-- Check if all players are dead.
 	task.delay(0.5, function()
@@ -112,12 +132,70 @@ function RoundManager.OnPlayerDied(player, killedByName)
 	end)
 end
 
+-- Counts down on the dead player's screen and teleports them back to the
+-- lobby when the countdown expires (unless they revive first).
+function RoundManager.StartDeathCountdown(player, survived, bestSeconds, isNewRecord)
+	local s = dm().GetSession(player)
+	-- Kill any prior countdown for this player.
+	if s.DeathTaskId then
+		s.DeathTaskId = nil  -- the prior task will see this and exit
+	end
+	local taskId = {}  -- unique table reference
+	s.DeathTaskId = taskId
+	s.PendingLobbyReturn = true
+
+	task.spawn(function()
+		local total = GameConfig.Round.DeathLobbyReturnSec
+		for left = total, 1, -1 do
+			-- If a different countdown was started or player revived, stop.
+			if s.DeathTaskId ~= taskId then return end
+			if s.Alive then
+				s.PendingLobbyReturn = false
+				return
+			end
+			getRemotes().DeathCountdown:FireClient(player, {
+				secondsLeft     = left,
+				survivedSeconds = survived,
+				bestSeconds     = bestSeconds,
+				isNewRecord     = isNewRecord and true or false,
+				canRevive       = not s.UsedRevive,
+			})
+			task.wait(1)
+		end
+
+		-- Verify still dead and same task; if so, return to lobby.
+		if s.DeathTaskId ~= taskId then return end
+		if s.Alive then return end
+
+		s.PendingLobbyReturn = false
+		s.DeathTaskId = nil
+		-- Send a final tick with secondsLeft=0 so the GUI can fade.
+		getRemotes().DeathCountdown:FireClient(player, {
+			secondsLeft     = 0,
+			survivedSeconds = survived,
+			bestSeconds     = bestSeconds,
+			isNewRecord     = isNewRecord and true or false,
+			canRevive       = false,
+		})
+		-- Respawn back at the lobby spawn (clean, no weapon).
+		player:LoadCharacter()
+		task.wait(0.4)
+		teleportToLobby(player)
+		-- ensure session is reset for spectating until next round
+		s.CurrentWeapon = "Stick"
+		clearTools(player)
+	end)
+end
+
 function RoundManager.RevivePlayer(player)
 	if RoundManager.State ~= "PLAYING" then return false end
 	local s = dm().GetSession(player)
 	if s.UsedRevive then return false end
 	s.UsedRevive = true
 	s.Alive = true
+	-- Cancel any pending death-to-lobby countdown for this player.
+	s.DeathTaskId = nil
+	s.PendingLobbyReturn = false
 
 	-- Respawn at a safe spot (crash position)
 	player:LoadCharacter()
@@ -214,6 +292,8 @@ function RoundManager.BeginPlaying(participants)
 		s.Alive = true
 		s.UsedRevive = false
 		s.XP = 0
+		s.DeathTaskId = nil
+		s.PendingLobbyReturn = false
 		-- Give starter weapon
 		if _G.ShopManager and _G.ShopManager.GiveWeapon then
 			_G.ShopManager.GiveWeapon(p, GameConfig.Round.StartingWeapon)
