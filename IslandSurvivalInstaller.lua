@@ -1,5 +1,5 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v2.5 — weapon grip fix)
+-- IslandSurvivalInstaller.lua  (v2.6 — clickable shop button)
 -- ====================================================================
 -- NON-DESTRUCTIVE installer. Only the 23 named scripts are replaced.
 -- Studio: enable "Allow API Services" -> View > Command Bar -> paste -> Enter.
@@ -3892,17 +3892,41 @@ local timeLabel = makeLabel(container, {
 	TextColor3 = Color3.fromRGB(180,220,255),
 })
 
--- Shop hint (bottom-right)
-local hint = makeLabel(screen, {
-	AnchorPoint = Vector2.new(1, 1),
-	Position = UDim2.new(1, -16, 1, -16),
-	Size = UDim2.new(0, 220, 0, 30),
-	Text = Strings.HUD.ShopHint,
-	TextColor3 = Color3.fromRGB(255, 220, 80),
-	BackgroundColor3 = Color3.fromRGB(28, 32, 40),
-	BackgroundTransparency = 0.3,
-	TextScaled = true,
-})
+-- Shop button (bottom-right) — also clickable so mobile/touch players can use it.
+local hint = Instance.new("TextButton")
+hint.Name = "ShopHint"
+hint.AnchorPoint = Vector2.new(1, 1)
+hint.Position = UDim2.new(1, -16, 1, -16)
+hint.Size = UDim2.new(0, 220, 0, 44)
+hint.BackgroundColor3 = Color3.fromRGB(36, 42, 54)
+hint.BackgroundTransparency = 0.15
+hint.BorderSizePixel = 0
+hint.Font = Enum.Font.GothamBold
+hint.TextColor3 = Color3.fromRGB(255, 220, 100)
+hint.TextStrokeTransparency = 0.5
+hint.TextScaled = true
+hint.AutoButtonColor = true
+hint.Text = Strings.HUD.ShopHint
+hint.Parent = screen
+do
+	local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0, 10); c.Parent = hint
+	local s = Instance.new("UIStroke"); s.Color = Color3.fromRGB(255, 200, 60); s.Thickness = 2; s.Parent = hint
+	local pad = Instance.new("UIPadding")
+	pad.PaddingLeft = UDim.new(0, 6); pad.PaddingRight = UDim.new(0, 6)
+	pad.PaddingTop = UDim.new(0, 4); pad.PaddingBottom = UDim.new(0, 4)
+	pad.Parent = hint
+end
+
+-- Wire the click into the shop's toggle. ShopGui creates a BindableEvent
+-- "ShopToggleEvent" inside PlayerGui that we fire here.
+hint.MouseButton1Click:Connect(function()
+	local evt = pg:FindFirstChild("ShopToggleEvent")
+	if not evt then
+		-- ShopGui may still be loading; wait briefly.
+		evt = pg:WaitForChild("ShopToggleEvent", 2)
+	end
+	if evt then evt:Fire() end
+end)
 
 local function fmtSeconds(t)
 	local m = math.floor(t/60)
@@ -4387,6 +4411,15 @@ UserInputService.InputBegan:Connect(function(input, gpe)
 		close()
 	end
 end)
+
+-- Cross-script trigger: HUDGui's clickable shop button fires this BindableEvent.
+local toggleEvent = pg:FindFirstChild("ShopToggleEvent")
+if not toggleEvent then
+	toggleEvent = Instance.new("BindableEvent")
+	toggleEvent.Name = "ShopToggleEvent"
+	toggleEvent.Parent = pg
+end
+toggleEvent.Event:Connect(toggle)
 
 -- Refresh shop state periodically while open
 task.spawn(function()
@@ -5222,7 +5255,7 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v2.5 installed successfully")
+print("[Install] Island Survival v2.6 installed successfully")
 print(string.format("[Install] %d scripts replaced (all other scripts left untouched)", #installed))
 for _, n in ipairs(installed) do print("    -", n) end
 print("[Install] Press Play (F5) to test.")

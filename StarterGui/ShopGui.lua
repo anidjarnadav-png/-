@@ -283,6 +283,15 @@ UserInputService.InputBegan:Connect(function(input, gpe)
 	end
 end)
 
+-- Cross-script trigger: HUDGui's clickable shop button fires this BindableEvent.
+local toggleEvent = pg:FindFirstChild("ShopToggleEvent")
+if not toggleEvent then
+	toggleEvent = Instance.new("BindableEvent")
+	toggleEvent.Name = "ShopToggleEvent"
+	toggleEvent.Parent = pg
+end
+toggleEvent.Event:Connect(toggle)
+
 -- Refresh shop state periodically while open
 task.spawn(function()
 	while true do
