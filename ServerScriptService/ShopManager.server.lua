@@ -132,7 +132,7 @@ local function buildStick(tool)
 		weldTo(handle, wrap)
 	end
 
-	tool.Grip = CFrame.new(0, 0, 1.4) * CFrame.Angles(math.rad(-90), 0, 0)
+	tool.Grip = CFrame.new(0, 0, -1.4)
 end
 
 -- ----- Spear: long shaft with a steel head -----
@@ -242,7 +242,7 @@ local function buildSpear(tool)
 	feather.CFrame = handle.CFrame * CFrame.new(0, 0.4, -2.55) * CFrame.Angles(0, 0, math.rad(15))
 	weldTo(handle, feather)
 
-	tool.Grip = CFrame.new(0, 0, 2.3) * CFrame.Angles(math.rad(-90), 0, 0)
+	tool.Grip = CFrame.new(0, 0, -2.2)
 end
 
 -- ----- Knife: short bladed weapon with crossguard -----
@@ -340,7 +340,7 @@ local function buildKnife(tool)
 	groove.CFrame = handle.CFrame * CFrame.new(0, 0.07, -1.55)
 	weldTo(handle, groove)
 
-	tool.Grip = CFrame.new(0, 0, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+	tool.Grip = CFrame.new(0, 0, 0)
 end
 
 -- ----- Pistol: realistic semi-auto -----
@@ -493,7 +493,7 @@ local function buildPistol(tool)
 	hammer.CFrame = slide.CFrame * CFrame.new(0, 0.34, 0.83)
 	weldTo(slide, hammer)
 
-	tool.Grip = CFrame.new(0, -0.7, 0.4) * CFrame.Angles(0, 0, 0)
+	tool.Grip = CFrame.new(0, 0.7, -0.4)
 end
 
 -- ----- Shotgun: pump-action with wooden stock -----
@@ -645,7 +645,7 @@ local function buildShotgun(tool)
 	trigger.CFrame = receiver.CFrame * CFrame.new(0, -0.55, 0.05)
 	weldTo(receiver, trigger)
 
-	tool.Grip = CFrame.new(0, -0.55, 0.5) * CFrame.Angles(0, 0, 0)
+	tool.Grip = CFrame.new(0, 0.55, -0.5)
 end
 
 local WEAPON_BUILDERS = {

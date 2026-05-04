@@ -1,14 +1,8 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v2.4 — detailed weapons)
+-- IslandSurvivalInstaller.lua  (v2.5 — weapon grip fix)
 -- ====================================================================
--- NON-DESTRUCTIVE installer. Only the 23 scripts named here are
--- replaced; any other scripts in the same containers are left alone.
---
--- USAGE
---   1. Studio -> Game Settings -> Security: Allow API Services ON.
---   2. View -> Command Bar.
---   3. Paste this entire script and press Enter.
---   4. Press Play (F5).
+-- NON-DESTRUCTIVE installer. Only the 23 named scripts are replaced.
+-- Studio: enable "Allow API Services" -> View > Command Bar -> paste -> Enter.
 -- ====================================================================
 
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
@@ -2774,7 +2768,7 @@ local function buildStick(tool)
 		weldTo(handle, wrap)
 	end
 
-	tool.Grip = CFrame.new(0, 0, 1.4) * CFrame.Angles(math.rad(-90), 0, 0)
+	tool.Grip = CFrame.new(0, 0, -1.4)
 end
 
 -- ----- Spear: long shaft with a steel head -----
@@ -2884,7 +2878,7 @@ local function buildSpear(tool)
 	feather.CFrame = handle.CFrame * CFrame.new(0, 0.4, -2.55) * CFrame.Angles(0, 0, math.rad(15))
 	weldTo(handle, feather)
 
-	tool.Grip = CFrame.new(0, 0, 2.3) * CFrame.Angles(math.rad(-90), 0, 0)
+	tool.Grip = CFrame.new(0, 0, -2.2)
 end
 
 -- ----- Knife: short bladed weapon with crossguard -----
@@ -2982,7 +2976,7 @@ local function buildKnife(tool)
 	groove.CFrame = handle.CFrame * CFrame.new(0, 0.07, -1.55)
 	weldTo(handle, groove)
 
-	tool.Grip = CFrame.new(0, 0, 0) * CFrame.Angles(math.rad(-90), 0, 0)
+	tool.Grip = CFrame.new(0, 0, 0)
 end
 
 -- ----- Pistol: realistic semi-auto -----
@@ -3135,7 +3129,7 @@ local function buildPistol(tool)
 	hammer.CFrame = slide.CFrame * CFrame.new(0, 0.34, 0.83)
 	weldTo(slide, hammer)
 
-	tool.Grip = CFrame.new(0, -0.7, 0.4) * CFrame.Angles(0, 0, 0)
+	tool.Grip = CFrame.new(0, 0.7, -0.4)
 end
 
 -- ----- Shotgun: pump-action with wooden stock -----
@@ -3287,7 +3281,7 @@ local function buildShotgun(tool)
 	trigger.CFrame = receiver.CFrame * CFrame.new(0, -0.55, 0.05)
 	weldTo(receiver, trigger)
 
-	tool.Grip = CFrame.new(0, -0.55, 0.5) * CFrame.Angles(0, 0, 0)
+	tool.Grip = CFrame.new(0, 0.55, -0.5)
 end
 
 local WEAPON_BUILDERS = {
@@ -5228,7 +5222,7 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v2.4 installed successfully")
+print("[Install] Island Survival v2.5 installed successfully")
 print(string.format("[Install] %d scripts replaced (all other scripts left untouched)", #installed))
 for _, n in ipairs(installed) do print("    -", n) end
 print("[Install] Press Play (F5) to test.")
