@@ -1,5 +1,5 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v2.6 — clickable shop button)
+-- IslandSurvivalInstaller.lua  (v2.7 — death GUI stale-event guard)
 -- ====================================================================
 -- NON-DESTRUCTIVE installer. Only the 23 named scripts are replaced.
 -- Studio: enable "Allow API Services" -> View > Command Bar -> paste -> Enter.
@@ -4649,9 +4649,11 @@ local function showDeath()
 	}):Play()
 end
 local function hideDeath()
-	TweenService:Create(backdrop, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
-	task.wait(0.3)
+	-- Hide immediately so a delayed in-flight DeathCountdown event with a
+	-- non-zero secondsLeft can't visually "stick" the GUI in a partially-
+	-- visible state. The tween still runs for a smooth fade-out look.
 	backdrop.Visible = false
+	TweenService:Create(backdrop, TweenInfo.new(0.3), { BackgroundTransparency = 1 }):Play()
 end
 
 reviveBtn.MouseButton1Click:Connect(function()
@@ -4678,9 +4680,17 @@ local function startPulse()
 end
 local function stopPulse() pulsing = false end
 
+-- Track the round state so we can ignore stale DeathCountdown events that
+-- arrive after the round transitioned out of PLAYING (network reordering
+-- in live Roblox can cause an old "secondsLeft=1" packet to arrive *after*
+-- the lobby/ending state change, which previously re-showed the GUI).
+local currentRoundState = "LOBBY"
+
 -- ====== Events ======
 Remotes.PlayerDied.OnClientEvent:Connect(function(payload)
 	payload = payload or {}
+	-- Only show death GUI if we're actually in a round.
+	if currentRoundState ~= "PLAYING" then return end
 	killedBy.Text = string.format(Strings.Death.KilledBy, payload.killedBy or "סכנה")
 	survivedValue.Text = fmtTime(payload.survivedSeconds or 0)
 	bestValue.Text     = fmtTime(payload.bestSeconds or 0)
@@ -4704,6 +4714,13 @@ end)
 
 Remotes.DeathCountdown.OnClientEvent:Connect(function(payload)
 	if not payload then return end
+	-- Reject stale countdown updates received after the round has already
+	-- ended. Without this guard the GUI can re-show showing a stuck count.
+	if currentRoundState ~= "PLAYING" then
+		stopPulse()
+		hideDeath()
+		return
+	end
 	if not backdrop.Visible then
 		showDeath()
 		startPulse()
@@ -4737,13 +4754,24 @@ end)
 
 -- Hide on respawn / state changes
 Remotes.RoundStateChanged.OnClientEvent:Connect(function(data)
-	if data and (data.state == "LOBBY" or data.state == "ENDING") then
+	if not data or not data.state then return end
+	currentRoundState = data.state
+	-- Anything that's not PLAYING means the death GUI should be hidden.
+	if data.state ~= "PLAYING" then
 		stopPulse()
 		hideDeath()
 	end
 end)
 Remotes.UpdateHUD.OnClientEvent:Connect(function(state)
+	if state and state.state then
+		currentRoundState = state.state
+	end
 	if state and state.alive then
+		stopPulse()
+		hideDeath()
+	end
+	-- Defense in depth: if the HUD says we're not in PLAYING, hide.
+	if state and state.state and state.state ~= "PLAYING" and backdrop.Visible then
 		stopPulse()
 		hideDeath()
 	end
@@ -5255,8 +5283,7 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v2.6 installed successfully")
-print(string.format("[Install] %d scripts replaced (all other scripts left untouched)", #installed))
-for _, n in ipairs(installed) do print("    -", n) end
+print("[Install] Island Survival v2.7 installed successfully")
+print(string.format("[Install] %d scripts replaced", #installed))
 print("[Install] Press Play (F5) to test.")
 print("==============================================================")
