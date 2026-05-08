@@ -80,6 +80,6 @@ if globalMsg then
 			local b = tonumber(hex:sub(5, 6), 16) or 255
 			color = Color3.fromRGB(r, g, b)
 		end
-		pop("[הודעת מערכת] " .. payload.text, color)
+		pop(payload.text, color)
 	end)
 end

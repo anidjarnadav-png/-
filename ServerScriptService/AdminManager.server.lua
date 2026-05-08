@@ -104,6 +104,57 @@ local function localBroadcastMessage(text, color)
 	})
 end
 
+-- ==== God Mode ====
+local godModeMap = {}    -- [userId] = true while enabled
+local godConnections = {} -- [userId] = HealthChanged RBXScriptConnection
+
+local function clearGodConnection(userId)
+	local c = godConnections[userId]
+	if c then
+		pcall(function() c:Disconnect() end)
+		godConnections[userId] = nil
+	end
+end
+
+local function attachGodMode(player)
+	clearGodConnection(player.UserId)
+	if not godModeMap[player.UserId] then return end
+	local char = player.Character
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	-- Snap to full first.
+	hum.Health = hum.MaxHealth
+	-- Reset HP every time it drops.
+	godConnections[player.UserId] = hum.HealthChanged:Connect(function(hp)
+		if not godModeMap[player.UserId] then
+			clearGodConnection(player.UserId)
+			return
+		end
+		if hp < hum.MaxHealth then
+			hum.Health = hum.MaxHealth
+		end
+	end)
+end
+
+-- Re-attach god mode when a god player's character respawns.
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function()
+		if godModeMap[p.UserId] then
+			task.wait(0.3)
+			attachGodMode(p)
+		end
+	end)
+end)
+Players.PlayerRemoving:Connect(function(p)
+	clearGodConnection(p.UserId)
+	godModeMap[p.UserId] = nil
+end)
+
+function AdminManager.IsGodMode(player)
+	return godModeMap[player.UserId] == true
+end
+
 -- ==== Action handlers ====
 local actions = {}
 
@@ -196,6 +247,29 @@ actions.heal = function(admin, data)
 	else
 		hum.Health = math.min(hum.MaxHealth, hum.Health + amount)
 		notify(admin, true, string.format("רפא %d HP ל-%s", amount, target.Name), "#51cf66")
+	end
+end
+
+actions.godMode = function(admin, data)
+	local target = resolveTarget(admin, data)
+	if not target then
+		notify(admin, false, "השחקן לא נמצא בשרת")
+		return
+	end
+	-- Toggle if no explicit "on" passed, otherwise honor it.
+	local desired
+	if data and data.on ~= nil then
+		desired = data.on and true or false
+	else
+		desired = not godModeMap[target.UserId]
+	end
+	godModeMap[target.UserId] = desired or nil
+	if desired then
+		attachGodMode(target)
+		notify(admin, true, string.format("God Mode הופעל ל-%s", target.Name), "#ffd43b")
+	else
+		clearGodConnection(target.UserId)
+		notify(admin, true, string.format("God Mode כובה ל-%s", target.Name), "#868e96")
 	end
 end
 

@@ -720,6 +720,30 @@ newButton(healSection, { LayoutOrder = 7, Text = "רפא" }, Color3.fromRGB(81, 
 		Remotes.AdminAction:FireServer({ action = "heal", data = data })
 	end)
 
+-- 6.5 GOD MODE
+local godSection = buildSection{
+	title = "God Mode",
+	titleColor = Color3.fromRGB(255, 212, 59),
+	desc  = "אי-פגיעות מוחלטת — לעצמך או לשחקן אחר. לחיצה נוספת מכבה.",
+	order = 65,
+}
+local godToggle = buildTargetToggle(godSection, "self")
+godToggle.LayoutOrder = 2
+local godUserLabel = newLabel(godSection, { Text = "שם משתמש", LayoutOrder = 3, Visible = false })
+local godUserInput = newInput(godSection, { LayoutOrder = 4, PlaceholderText = "שם משתמש...", Visible = false })
+godToggle.onChange = function(v)
+	local show = v == "other"
+	godUserLabel.Visible = show
+	godUserInput.Visible = show
+end
+newButton(godSection, { LayoutOrder = 5, Text = "הפעל / כבה God Mode" }, Color3.fromRGB(255, 212, 59), Color3.fromRGB(0, 0, 0))
+	.MouseButton1Click:Connect(function()
+		Remotes.AdminAction:FireServer({
+			action = "godMode",
+			data = { target = godToggle.value, username = godUserInput.Text },
+		})
+	end)
+
 -- 7. RESTART SERVER
 local rsSection = buildSection{
 	title = "Restart Server",

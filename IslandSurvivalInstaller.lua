@@ -1,5 +1,5 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v3.2 — DevPanel respawn fix)
+-- IslandSurvivalInstaller.lua  (v3.3 — God Mode + plain global msg)
 -- ====================================================================
 -- NON-DESTRUCTIVE installer. Studio: enable "Allow API Services" ->
 -- View > Command Bar -> paste -> Enter.
@@ -3731,6 +3731,57 @@ local function localBroadcastMessage(text, color)
 	})
 end
 
+-- ==== God Mode ====
+local godModeMap = {}    -- [userId] = true while enabled
+local godConnections = {} -- [userId] = HealthChanged RBXScriptConnection
+
+local function clearGodConnection(userId)
+	local c = godConnections[userId]
+	if c then
+		pcall(function() c:Disconnect() end)
+		godConnections[userId] = nil
+	end
+end
+
+local function attachGodMode(player)
+	clearGodConnection(player.UserId)
+	if not godModeMap[player.UserId] then return end
+	local char = player.Character
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid")
+	if not hum then return end
+	-- Snap to full first.
+	hum.Health = hum.MaxHealth
+	-- Reset HP every time it drops.
+	godConnections[player.UserId] = hum.HealthChanged:Connect(function(hp)
+		if not godModeMap[player.UserId] then
+			clearGodConnection(player.UserId)
+			return
+		end
+		if hp < hum.MaxHealth then
+			hum.Health = hum.MaxHealth
+		end
+	end)
+end
+
+-- Re-attach god mode when a god player's character respawns.
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function()
+		if godModeMap[p.UserId] then
+			task.wait(0.3)
+			attachGodMode(p)
+		end
+	end)
+end)
+Players.PlayerRemoving:Connect(function(p)
+	clearGodConnection(p.UserId)
+	godModeMap[p.UserId] = nil
+end)
+
+function AdminManager.IsGodMode(player)
+	return godModeMap[player.UserId] == true
+end
+
 -- ==== Action handlers ====
 local actions = {}
 
@@ -3823,6 +3874,29 @@ actions.heal = function(admin, data)
 	else
 		hum.Health = math.min(hum.MaxHealth, hum.Health + amount)
 		notify(admin, true, string.format("רפא %d HP ל-%s", amount, target.Name), "#51cf66")
+	end
+end
+
+actions.godMode = function(admin, data)
+	local target = resolveTarget(admin, data)
+	if not target then
+		notify(admin, false, "השחקן לא נמצא בשרת")
+		return
+	end
+	-- Toggle if no explicit "on" passed, otherwise honor it.
+	local desired
+	if data and data.on ~= nil then
+		desired = data.on and true or false
+	else
+		desired = not godModeMap[target.UserId]
+	end
+	godModeMap[target.UserId] = desired or nil
+	if desired then
+		attachGodMode(target)
+		notify(admin, true, string.format("God Mode הופעל ל-%s", target.Name), "#ffd43b")
+	else
+		clearGodConnection(target.UserId)
+		notify(admin, true, string.format("God Mode כובה ל-%s", target.Name), "#868e96")
 	end
 end
 
@@ -5305,7 +5379,7 @@ if globalMsg then
 			local b = tonumber(hex:sub(5, 6), 16) or 255
 			color = Color3.fromRGB(r, g, b)
 		end
-		pop("[הודעת מערכת] " .. payload.text, color)
+		pop(payload.text, color)
 	end)
 end
 
@@ -6423,6 +6497,30 @@ newButton(healSection, { LayoutOrder = 7, Text = "רפא" }, Color3.fromRGB(81, 
 		Remotes.AdminAction:FireServer({ action = "heal", data = data })
 	end)
 
+-- 6.5 GOD MODE
+local godSection = buildSection{
+	title = "God Mode",
+	titleColor = Color3.fromRGB(255, 212, 59),
+	desc  = "אי-פגיעות מוחלטת — לעצמך או לשחקן אחר. לחיצה נוספת מכבה.",
+	order = 65,
+}
+local godToggle = buildTargetToggle(godSection, "self")
+godToggle.LayoutOrder = 2
+local godUserLabel = newLabel(godSection, { Text = "שם משתמש", LayoutOrder = 3, Visible = false })
+local godUserInput = newInput(godSection, { LayoutOrder = 4, PlaceholderText = "שם משתמש...", Visible = false })
+godToggle.onChange = function(v)
+	local show = v == "other"
+	godUserLabel.Visible = show
+	godUserInput.Visible = show
+end
+newButton(godSection, { LayoutOrder = 5, Text = "הפעל / כבה God Mode" }, Color3.fromRGB(255, 212, 59), Color3.fromRGB(0, 0, 0))
+	.MouseButton1Click:Connect(function()
+		Remotes.AdminAction:FireServer({
+			action = "godMode",
+			data = { target = godToggle.value, username = godUserInput.Text },
+		})
+	end)
+
 -- 7. RESTART SERVER
 local rsSection = buildSection{
 	title = "Restart Server",
@@ -6606,9 +6704,6 @@ track(StarterGui, "ShopGui",         "LocalScript", sources.ShopGui)
 track(StarterGui, "DeathGui",        "LocalScript", sources.DeathGui)
 track(StarterGui, "NotificationGui", "LocalScript", sources.NotificationGui)
 
--- Important: DevPanelGui lives in StarterPlayerScripts (not StarterGui)
--- so it isn't reset on character respawn. Also clean up any stale copy
--- that may have been left in StarterGui by a previous installer version.
 local oldDev = StarterGui:FindFirstChild("DevPanelGui")
 if oldDev then oldDev:Destroy() end
 
@@ -6627,6 +6722,6 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v3.2 installed successfully")
+print("[Install] Island Survival v3.3 installed successfully")
 print(string.format("[Install] %d scripts replaced", #installed))
 print("==============================================================")
