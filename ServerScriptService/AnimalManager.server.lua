@@ -501,6 +501,21 @@ function AnimalManager.SpawnOne()
 	return model
 end
 
+-- Spawn a SPECIFIC species (used by the dev panel "spawn animal" action).
+-- animalId is one of the AnimalConfig.List Ids ("Dog", "Wolf", "Bear", "Lion").
+function AnimalManager.SpawnSpecific(animalId)
+	local spec = AnimalConfig.ById[animalId]
+	if not spec then return nil end
+	local model = buildAnimalModel(spec)
+	local pos = pickSpawnPos()
+	model.Parent = Workspace
+	model:PivotTo(CFrame.new(pos))
+	active[model] = { spec = spec }
+	attachHumanoidWatcher(model, spec)
+	task.spawn(runAnimalAI, model, spec)
+	return model
+end
+
 function AnimalManager.GetActive() return active end
 
 function AnimalManager.CountActive()

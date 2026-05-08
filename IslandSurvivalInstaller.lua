@@ -1,8 +1,8 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v3.0 — Dev Panel)
+-- IslandSurvivalInstaller.lua  (v3.1 — DevPanel fixes + spawn-animal)
 -- ====================================================================
--- NON-DESTRUCTIVE installer. Only the 25 named scripts are replaced.
--- Studio: enable "Allow API Services" -> View > Command Bar -> paste -> Enter.
+-- NON-DESTRUCTIVE installer. Studio: enable "Allow API Services" ->
+-- View > Command Bar -> paste -> Enter.
 -- ====================================================================
 
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
@@ -2461,6 +2461,21 @@ function AnimalManager.SpawnOne()
 	return model
 end
 
+-- Spawn a SPECIFIC species (used by the dev panel "spawn animal" action).
+-- animalId is one of the AnimalConfig.List Ids ("Dog", "Wolf", "Bear", "Lion").
+function AnimalManager.SpawnSpecific(animalId)
+	local spec = AnimalConfig.ById[animalId]
+	if not spec then return nil end
+	local model = buildAnimalModel(spec)
+	local pos = pickSpawnPos()
+	model.Parent = Workspace
+	model:PivotTo(CFrame.new(pos))
+	active[model] = { spec = spec }
+	attachHumanoidWatcher(model, spec)
+	task.spawn(runAnimalAI, model, spec)
+	return model
+end
+
 function AnimalManager.GetActive() return active end
 
 function AnimalManager.CountActive()
@@ -3677,6 +3692,7 @@ end)
 -- ==== Cross-server messaging ====
 local TOPIC_GLOBAL = "IslandSurvival.GlobalMessage"
 local TOPIC_RESTART_ALL = "IslandSurvival.RestartAll"
+local TOPIC_SPAWN_ANIMAL = "IslandSurvival.SpawnAnimal"
 
 -- ==== Helpers ====
 local function notify(player, ok, message, color)
@@ -3872,6 +3888,59 @@ local function teleportEveryoneToSamePlace(reason)
 	end
 end
 
+local function spawnAnimalsLocal(animalId, count)
+	if not _G.AnimalManager or not _G.AnimalManager.SpawnSpecific then return 0 end
+	count = math.clamp(tonumber(count) or 1, 1, 30)
+	local spawned = 0
+	for _ = 1, count do
+		if _G.AnimalManager.SpawnSpecific(animalId) then
+			spawned = spawned + 1
+		end
+		task.wait(0.05)
+	end
+	return spawned
+end
+
+actions.spawnAnimal = function(admin, data)
+	local animalId = tostring(data and data.animalId or "")
+	local count = tonumber(data and data.count) or 1
+	local AnimalConfig = require(ReplicatedStorage:WaitForChild("AnimalConfig"))
+	if not AnimalConfig.ById[animalId] then
+		notify(admin, false, "חיה לא תקינה")
+		return
+	end
+	if not _G.RoundManager or _G.RoundManager.GetState() ~= "PLAYING" then
+		notify(admin, false, "אפשר לזמן חיות רק במהלך סבב")
+		return
+	end
+	local spawned = spawnAnimalsLocal(animalId, count)
+	notify(admin, true, string.format("זומנו %d חיות (%s)", spawned, animalId), "#ffa94d")
+end
+
+actions.spawnAnimalAll = function(admin, data)
+	local animalId = tostring(data and data.animalId or "")
+	local count = tonumber(data and data.count) or 1
+	local AnimalConfig = require(ReplicatedStorage:WaitForChild("AnimalConfig"))
+	if not AnimalConfig.ById[animalId] then
+		notify(admin, false, "חיה לא תקינה")
+		return
+	end
+	-- Spawn locally (this server) immediately if we're playing.
+	local spawned = 0
+	if _G.RoundManager and _G.RoundManager.GetState() == "PLAYING" then
+		spawned = spawnAnimalsLocal(animalId, count)
+	end
+	-- Tell every other server to spawn too.
+	pcall(function()
+		MessagingService:PublishAsync(TOPIC_SPAWN_ANIMAL, {
+			animalId = animalId,
+			count    = count,
+			sender   = admin.UserId,
+		})
+	end)
+	notify(admin, true, string.format("בקשה להזמנת %d %s נשלחה לכל השרתים", count, animalId), "#ff5757")
+end
+
 actions.restartServer = function(admin, data)
 	local reason = (data and data.reason) and tostring(data.reason) or ""
 	local text = "השרת מופעל מחדש"
@@ -3911,6 +3980,20 @@ pcall(function()
 			end
 			localBroadcastMessage(data.text, data.color)
 		end
+	end)
+end)
+
+pcall(function()
+	MessagingService:SubscribeAsync(TOPIC_SPAWN_ANIMAL, function(packet)
+		local data = packet.Data
+		if type(data) ~= "table" or not data.animalId then return end
+		-- Don't spawn twice on the originating server.
+		if data.sender then
+			local s = Players:GetPlayerByUserId(data.sender)
+			if s and s.Parent then return end
+		end
+		if not _G.RoundManager or _G.RoundManager.GetState() ~= "PLAYING" then return end
+		spawnAnimalsLocal(data.animalId, data.count)
 	end)
 end)
 
@@ -5301,11 +5384,11 @@ local function listLayout(p, padding, dir)
 	return l
 end
 
--- ==== Devs Panel opener button (top-left) ====
+-- ==== Devs Panel opener button (bottom-left, above the cart icon) ====
 local opener = Instance.new("TextButton")
 opener.Name = "DevsPanelOpener"
-opener.AnchorPoint = Vector2.new(0, 0)
-opener.Position = UDim2.new(0, 24, 0, 24)
+opener.AnchorPoint = Vector2.new(0, 1)
+opener.Position = UDim2.new(0, 16, 1, -130)
 opener.Size = UDim2.new(0, 150, 0, 44)
 opener.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 opener.BorderSizePixel = 0
@@ -5822,7 +5905,8 @@ newLabel(weaponSection, { Text = "בחר נשק", LayoutOrder = 5 })
 local wPickRow = Instance.new("Frame", weaponSection)
 wPickRow.LayoutOrder = 6
 wPickRow.BackgroundTransparency = 1
-wPickRow.Size = UDim2.new(1, 0, 0, 90)
+wPickRow.Size = UDim2.new(1, 0, 0, 0)
+wPickRow.AutomaticSize = Enum.AutomaticSize.Y
 do
 	local g = Instance.new("UIGridLayout", wPickRow)
 	g.CellSize = UDim2.new(0.5, -4, 0, 38)
@@ -5955,12 +6039,90 @@ newButton(rsSection, { LayoutOrder = 4, Text = "Restart Server" }, Color3.fromRG
 		rsReason.Text = ""
 	end)
 
--- 8. RESTART ALL
+-- 8. SPAWN ANIMAL (this server / all servers)
+local AnimalConfig = require(ReplicatedStorage:WaitForChild("AnimalConfig"))
+local animalSection = buildSection{
+	title = "זמן חיה",
+	titleColor = Color3.fromRGB(255, 169, 77),
+	desc  = "ייצר חיה — בשרת הזה או בכל השרתים",
+	order = 8,
+}
+newLabel(animalSection, { Text = "בחר חיה", LayoutOrder = 2 })
+local aPickRow = Instance.new("Frame", animalSection)
+aPickRow.LayoutOrder = 3
+aPickRow.BackgroundTransparency = 1
+aPickRow.Size = UDim2.new(1, 0, 0, 0)
+aPickRow.AutomaticSize = Enum.AutomaticSize.Y
+do
+	local g = Instance.new("UIGridLayout", aPickRow)
+	g.CellSize = UDim2.new(0.5, -4, 0, 38)
+	g.CellPadding = UDim2.new(0, 8, 0, 8)
+	g.SortOrder = Enum.SortOrder.LayoutOrder
+end
+local ANIMALS = {
+	{ id = "Dog",  label = Strings.Animals.Dog  },
+	{ id = "Wolf", label = Strings.Animals.Wolf },
+	{ id = "Bear", label = Strings.Animals.Bear },
+	{ id = "Lion", label = Strings.Animals.Lion },
+}
+local selectedAnimal = "Dog"
+local animalBtns = {}
+for i, a in ipairs(ANIMALS) do
+	local b = Instance.new("TextButton", aPickRow)
+	b.LayoutOrder = i
+	b.AutoButtonColor = false
+	b.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+	b.BorderSizePixel = 0
+	b.Font = Enum.Font.GothamBold
+	b.TextColor3 = Color3.fromRGB(180, 180, 180)
+	b.TextSize = 14
+	b.Text = a.label
+	corner(b, 8)
+	local s = stroke(b, Color3.fromRGB(255, 255, 255), 1, 0.85)
+	animalBtns[i] = { btn = b, id = a.id, stroke = s }
+	b.MouseButton1Click:Connect(function()
+		selectedAnimal = a.id
+		for _, ab in ipairs(animalBtns) do
+			if ab.id == selectedAnimal then
+				ab.btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255); ab.btn.TextColor3 = Color3.fromRGB(0, 0, 0); ab.stroke.Transparency = 0
+			else
+				ab.btn.BackgroundColor3 = Color3.fromRGB(20, 20, 20); ab.btn.TextColor3 = Color3.fromRGB(180, 180, 180); ab.stroke.Transparency = 0.85
+			end
+		end
+	end)
+end
+animalBtns[1].btn.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+animalBtns[1].btn.TextColor3 = Color3.fromRGB(0, 0, 0)
+animalBtns[1].stroke.Transparency = 0
+
+newLabel(animalSection, { Text = "כמות (ברירת מחדל 1)", LayoutOrder = 4 })
+local animalCount = newInput(animalSection, { LayoutOrder = 5, PlaceholderText = "1", Text = "" })
+
+newButton(animalSection, { LayoutOrder = 6, Text = "זמן בשרת הזה" }, Color3.fromRGB(255, 169, 77), Color3.fromRGB(0, 0, 0))
+	.MouseButton1Click:Connect(function()
+		local count = tonumber(animalCount.Text) or 1
+		count = math.clamp(math.floor(count), 1, 30)
+		Remotes.AdminAction:FireServer({
+			action = "spawnAnimal",
+			data = { animalId = selectedAnimal, count = count },
+		})
+	end)
+newButton(animalSection, { LayoutOrder = 7, Text = "זמן בכל השרתים" }, Color3.fromRGB(255, 87, 87), Color3.fromRGB(255, 255, 255))
+	.MouseButton1Click:Connect(function()
+		local count = tonumber(animalCount.Text) or 1
+		count = math.clamp(math.floor(count), 1, 30)
+		Remotes.AdminAction:FireServer({
+			action = "spawnAnimalAll",
+			data = { animalId = selectedAnimal, count = count },
+		})
+	end)
+
+-- 9. RESTART ALL
 local raSection = buildSection{
 	title = "Restart All Servers",
 	titleColor = Color3.fromRGB(255, 87, 87),
 	desc  = "הפעל מחדש את כל השרתים הפעילים — מתאים לעדכונים",
-	order = 8,
+	order = 9,
 }
 newLabel(raSection, { Text = "סיבה (אופציונלי)", LayoutOrder = 2 })
 local raReason = newInput(raSection, { LayoutOrder = 3, PlaceholderText = "מקום לרשום..." })
@@ -6449,7 +6611,6 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v3.0 (Dev Panel) installed successfully")
+print("[Install] Island Survival v3.1 installed successfully")
 print(string.format("[Install] %d scripts replaced", #installed))
-print("[Install] Press Play (F5) to test. Admin UserIDs in GameConfig.Owners.")
 print("==============================================================")

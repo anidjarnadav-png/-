@@ -65,6 +65,7 @@ end)
 -- ==== Cross-server messaging ====
 local TOPIC_GLOBAL = "IslandSurvival.GlobalMessage"
 local TOPIC_RESTART_ALL = "IslandSurvival.RestartAll"
+local TOPIC_SPAWN_ANIMAL = "IslandSurvival.SpawnAnimal"
 
 -- ==== Helpers ====
 local function notify(player, ok, message, color)
@@ -260,6 +261,59 @@ local function teleportEveryoneToSamePlace(reason)
 	end
 end
 
+local function spawnAnimalsLocal(animalId, count)
+	if not _G.AnimalManager or not _G.AnimalManager.SpawnSpecific then return 0 end
+	count = math.clamp(tonumber(count) or 1, 1, 30)
+	local spawned = 0
+	for _ = 1, count do
+		if _G.AnimalManager.SpawnSpecific(animalId) then
+			spawned = spawned + 1
+		end
+		task.wait(0.05)
+	end
+	return spawned
+end
+
+actions.spawnAnimal = function(admin, data)
+	local animalId = tostring(data and data.animalId or "")
+	local count = tonumber(data and data.count) or 1
+	local AnimalConfig = require(ReplicatedStorage:WaitForChild("AnimalConfig"))
+	if not AnimalConfig.ById[animalId] then
+		notify(admin, false, "חיה לא תקינה")
+		return
+	end
+	if not _G.RoundManager or _G.RoundManager.GetState() ~= "PLAYING" then
+		notify(admin, false, "אפשר לזמן חיות רק במהלך סבב")
+		return
+	end
+	local spawned = spawnAnimalsLocal(animalId, count)
+	notify(admin, true, string.format("זומנו %d חיות (%s)", spawned, animalId), "#ffa94d")
+end
+
+actions.spawnAnimalAll = function(admin, data)
+	local animalId = tostring(data and data.animalId or "")
+	local count = tonumber(data and data.count) or 1
+	local AnimalConfig = require(ReplicatedStorage:WaitForChild("AnimalConfig"))
+	if not AnimalConfig.ById[animalId] then
+		notify(admin, false, "חיה לא תקינה")
+		return
+	end
+	-- Spawn locally (this server) immediately if we're playing.
+	local spawned = 0
+	if _G.RoundManager and _G.RoundManager.GetState() == "PLAYING" then
+		spawned = spawnAnimalsLocal(animalId, count)
+	end
+	-- Tell every other server to spawn too.
+	pcall(function()
+		MessagingService:PublishAsync(TOPIC_SPAWN_ANIMAL, {
+			animalId = animalId,
+			count    = count,
+			sender   = admin.UserId,
+		})
+	end)
+	notify(admin, true, string.format("בקשה להזמנת %d %s נשלחה לכל השרתים", count, animalId), "#ff5757")
+end
+
 actions.restartServer = function(admin, data)
 	local reason = (data and data.reason) and tostring(data.reason) or ""
 	local text = "השרת מופעל מחדש"
@@ -299,6 +353,20 @@ pcall(function()
 			end
 			localBroadcastMessage(data.text, data.color)
 		end
+	end)
+end)
+
+pcall(function()
+	MessagingService:SubscribeAsync(TOPIC_SPAWN_ANIMAL, function(packet)
+		local data = packet.Data
+		if type(data) ~= "table" or not data.animalId then return end
+		-- Don't spawn twice on the originating server.
+		if data.sender then
+			local s = Players:GetPlayerByUserId(data.sender)
+			if s and s.Parent then return end
+		end
+		if not _G.RoundManager or _G.RoundManager.GetState() ~= "PLAYING" then return end
+		spawnAnimalsLocal(data.animalId, data.count)
 	end)
 end)
 
