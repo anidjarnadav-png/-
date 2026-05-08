@@ -342,11 +342,21 @@ Remotes.UpdateHUD.OnClientEvent:Connect(function(state)
 	if state and state.state then
 		currentRoundState = state.state
 	end
+	-- Only hide on alive=true if the LOCAL character is actually alive too.
+	-- Without this guard, the server's HUD pulse (which fires every 0.5s)
+	-- would race the player's death and reset session.Alive to false:
+	-- the client's Humanoid.Died handler shows the GUI; ~half a second
+	-- later the server pulse arrives with stale alive=true; we'd hide
+	-- the GUI even though the player is still dead.
 	if state and state.alive then
-		stopPulse()
-		hideDeath()
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			stopPulse()
+			hideDeath()
+		end
 	end
-	-- Defense in depth: if the HUD says we're not in PLAYING, hide.
+	-- Defense in depth: hide if the round itself is no longer playing.
 	if state and state.state and state.state ~= "PLAYING" and backdrop.Visible then
 		stopPulse()
 		hideDeath()

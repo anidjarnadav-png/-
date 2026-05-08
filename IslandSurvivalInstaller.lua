@@ -1,8 +1,8 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v3.6 — death GUI client fallback)
+-- IslandSurvivalInstaller.lua  (v3.7 — death GUI race fix)
 -- ====================================================================
 -- NON-DESTRUCTIVE installer. Studio: enable "Allow API Services" ->
--- View > Command Bar -> paste -> Enter.
+-- View > Command Bar -> paste -> Enter. STOP THE GAME AND PLAY AGAIN.
 -- ====================================================================
 
 local ReplicatedStorage   = game:GetService("ReplicatedStorage")
@@ -6686,11 +6686,21 @@ Remotes.UpdateHUD.OnClientEvent:Connect(function(state)
 	if state and state.state then
 		currentRoundState = state.state
 	end
+	-- Only hide on alive=true if the LOCAL character is actually alive too.
+	-- Without this guard, the server's HUD pulse (which fires every 0.5s)
+	-- would race the player's death and reset session.Alive to false:
+	-- the client's Humanoid.Died handler shows the GUI; ~half a second
+	-- later the server pulse arrives with stale alive=true; we'd hide
+	-- the GUI even though the player is still dead.
 	if state and state.alive then
-		stopPulse()
-		hideDeath()
+		local char = player.Character
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health > 0 then
+			stopPulse()
+			hideDeath()
+		end
 	end
-	-- Defense in depth: if the HUD says we're not in PLAYING, hide.
+	-- Defense in depth: hide if the round itself is no longer playing.
 	if state and state.state and state.state ~= "PLAYING" and backdrop.Visible then
 		stopPulse()
 		hideDeath()
@@ -6781,7 +6791,7 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v3.6 installed successfully")
+print("[Install] Island Survival v3.7 installed successfully")
 print(string.format("[Install] %d scripts replaced", #installed))
-print("[Install] IMPORTANT: stop the game (Stop button) and Play again so the new code runs.")
+print("[Install] Stop the game and Play again to pick up the new code.")
 print("==============================================================")
