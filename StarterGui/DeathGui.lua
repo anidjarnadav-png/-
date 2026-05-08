@@ -249,8 +249,12 @@ local currentRoundState = "LOBBY"
 -- ====== Events ======
 Remotes.PlayerDied.OnClientEvent:Connect(function(payload)
 	payload = payload or {}
-	-- Only show death GUI if we're actually in a round.
-	if currentRoundState ~= "PLAYING" then return end
+	-- The server only fires PlayerDied during a real PLAYING-state death,
+	-- so we trust it and force-update our local state tracker. (We used to
+	-- guard on currentRoundState here, but that occasionally rejected a
+	-- valid death event when the client hadn't received an UpdateHUD pulse
+	-- yet — leaving the player in a "dead but no GUI" limbo.)
+	currentRoundState = "PLAYING"
 	killedBy.Text = string.format(Strings.Death.KilledBy, payload.killedBy or "סכנה")
 	survivedValue.Text = fmtTime(payload.survivedSeconds or 0)
 	bestValue.Text     = fmtTime(payload.bestSeconds or 0)
