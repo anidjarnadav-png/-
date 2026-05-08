@@ -1,5 +1,5 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v3.1 — DevPanel fixes + spawn-animal)
+-- IslandSurvivalInstaller.lua  (v3.2 — DevPanel respawn fix)
 -- ====================================================================
 -- NON-DESTRUCTIVE installer. Studio: enable "Allow API Services" ->
 -- View > Command Bar -> paste -> Enter.
@@ -5311,14 +5311,404 @@ end
 
 ]==]
 
+sources.ClientCombat = [==[
+-- ClientCombat.lua
+-- Place in: StarterPlayerScripts as LocalScript named "ClientCombat"
+-- Bridges Tool.Activated to RequestAttack, picking the nearest valid animal target.
+
+local Players          = game:GetService("Players")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local UserInputService = game:GetService("UserInputService")
+local Workspace        = game:GetService("Workspace")
+
+local WeaponConfig = require(ReplicatedStorage:WaitForChild("WeaponConfig"))
+
+local player = Players.LocalPlayer
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local lastSendByTool = {}  -- per Tool, last activation time
+
+local function getEquippedTool(char)
+	if not char then return nil end
+	for _, c in ipairs(char:GetChildren()) do
+		if c:IsA("Tool") and c:GetAttribute("WeaponId") then
+			return c
+		end
+	end
+	return nil
+end
+
+-- Find the best animal target near the player (front-cone).
+local function findTarget(weapon, char, hrp)
+	local fwd = hrp.CFrame.LookVector
+	local origin = hrp.Position
+	local best, bestScore = nil, math.huge
+	for _, m in ipairs(Workspace:GetDescendants()) do
+		if m:IsA("Model") and m:GetAttribute("AnimalId") then
+			local hum = m:FindFirstChildOfClass("Humanoid")
+			local thrp = m.PrimaryPart or m:FindFirstChild("HumanoidRootPart")
+			if hum and hum.Health > 0 and thrp then
+				local toT = thrp.Position - origin
+				local dist = toT.Magnitude
+				if dist <= weapon.Range + 4 then
+					local dir = toT.Unit
+					local dot = fwd:Dot(dir)
+					-- accept frontal hemisphere; prefer closer + more aligned
+					if dot > 0.2 then
+						local score = dist - dot * 5
+						if score < bestScore then
+							best, bestScore = m, score
+						end
+					end
+				end
+			end
+		end
+	end
+	return best
+end
+
+local function tryAttack(tool)
+	local now = tick()
+	local weaponId = tool:GetAttribute("WeaponId")
+	local weapon = WeaponConfig.ById[weaponId]
+	if not weapon then return end
+	local lastT = lastSendByTool[tool] or 0
+	if now - lastT < weapon.Cooldown then return end
+	local char = player.Character
+	if not char then return end
+	local hrp = char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return end
+	local target = findTarget(weapon, char, hrp)
+	if not target then return end
+	lastSendByTool[tool] = now
+	Remotes.RequestAttack:FireServer({ target = target })
+end
+
+local function bindTool(tool)
+	tool.Activated:Connect(function()
+		tryAttack(tool)
+	end)
+end
+
+local function onCharacter(char)
+	char.ChildAdded:Connect(function(c)
+		if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
+	end)
+	for _, c in ipairs(char:GetChildren()) do
+		if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
+	end
+	local backpack = player:FindFirstChildOfClass("Backpack")
+	if backpack then
+		backpack.ChildAdded:Connect(function(c)
+			if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
+		end)
+		for _, c in ipairs(backpack:GetChildren()) do
+			if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
+		end
+	end
+end
+
+if player.Character then onCharacter(player.Character) end
+player.CharacterAdded:Connect(onCharacter)
+
+]==]
+
+sources.EffectsClient = [==[
+-- EffectsClient.lua
+-- Place in: StarterPlayerScripts as LocalScript named "EffectsClient"
+-- Floating damage numbers, hit sparks, and animal-death poof.
+
+local Players          = game:GetService("Players")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local TweenService     = game:GetService("TweenService")
+local Debris           = game:GetService("Debris")
+local Workspace        = game:GetService("Workspace")
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local function spawnDamageNumber(position, amount, color)
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide = false
+	part.Transparency = 1
+	part.Size = Vector3.new(0.1, 0.1, 0.1)
+	part.Position = position
+	part.Parent = Workspace
+
+	local bb = Instance.new("BillboardGui", part)
+	bb.Size = UDim2.new(0, 80, 0, 32)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	local lbl = Instance.new("TextLabel", bb)
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.new(1, 0, 1, 0)
+	lbl.Font = Enum.Font.GothamBlack
+	lbl.TextScaled = true
+	lbl.TextColor3 = color or Color3.fromRGB(255, 220, 80)
+	lbl.TextStrokeTransparency = 0
+	lbl.Text = "-" .. tostring(amount)
+
+	-- Float up and fade
+	local up = TweenService:Create(part, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
+		Position = position + Vector3.new(0, 4, 0)
+	})
+	up:Play()
+	task.delay(0.4, function()
+		TweenService:Create(lbl, TweenInfo.new(0.5), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+	end)
+	Debris:AddItem(part, 1.0)
+end
+
+local function spawnDeathPoof(position, name)
+	local part = Instance.new("Part")
+	part.Anchored = true
+	part.CanCollide = false
+	part.Transparency = 1
+	part.Size = Vector3.new(0.1, 0.1, 0.1)
+	part.Position = position + Vector3.new(0, 3, 0)
+	part.Parent = Workspace
+
+	local bb = Instance.new("BillboardGui", part)
+	bb.Size = UDim2.new(0, 220, 0, 60)
+	bb.AlwaysOnTop = true
+	local lbl = Instance.new("TextLabel", bb)
+	lbl.BackgroundTransparency = 1
+	lbl.Size = UDim2.new(1, 0, 1, 0)
+	lbl.Font = Enum.Font.GothamBlack
+	lbl.TextColor3 = Color3.fromRGB(255, 100, 100)
+	lbl.TextStrokeTransparency = 0
+	lbl.TextScaled = true
+	lbl.Text = (name and name .. " - הוכרע!") or "הוכרע!"
+
+	-- Smoke
+	local smoke = Instance.new("Smoke")
+	smoke.Color = Color3.fromRGB(80, 30, 30)
+	smoke.Size = 4
+	smoke.RiseVelocity = 4
+	smoke.Opacity = 0.5
+	smoke.Parent = part
+
+	TweenService:Create(part, TweenInfo.new(1.2, Enum.EasingStyle.Quad), {
+		Position = position + Vector3.new(0, 8, 0)
+	}):Play()
+	task.delay(0.6, function()
+		TweenService:Create(lbl, TweenInfo.new(0.5), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
+	end)
+	Debris:AddItem(part, 2)
+end
+
+Remotes.ShowDamage.OnClientEvent:Connect(function(payload)
+	if not payload then return end
+	spawnDamageNumber(payload.position, payload.amount, payload.color)
+end)
+
+Remotes.AnimalDied.OnClientEvent:Connect(function(payload)
+	if not payload then return end
+	spawnDeathPoof(payload.position, payload.displayName)
+end)
+
+Remotes.CrashEffect.OnClientEvent:Connect(function(payload)
+	if not payload then return end
+	-- big red flash
+	local sg = Instance.new("ScreenGui", Players.LocalPlayer:WaitForChild("PlayerGui"))
+	sg.IgnoreGuiInset = true
+	local f = Instance.new("Frame", sg)
+	f.Size = UDim2.new(1, 0, 1, 0)
+	f.BackgroundColor3 = Color3.fromRGB(220, 60, 30)
+	f.BackgroundTransparency = 0.2
+	f.BorderSizePixel = 0
+	TweenService:Create(f, TweenInfo.new(1.0), { BackgroundTransparency = 1 }):Play()
+	Debris:AddItem(sg, 1.5)
+end)
+
+]==]
+
+sources.CameraClient = [==[
+-- CameraClient.lua
+-- Place in: StarterPlayerScripts as LocalScript named "CameraClient"
+-- Camera shake on damage taken or crash.
+
+local Players          = game:GetService("Players")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local RunService       = game:GetService("RunService")
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local player  = Players.LocalPlayer
+
+local shakeAmt = 0
+local shakeDecay = 5  -- per second
+
+RunService.RenderStepped:Connect(function(dt)
+	local cam = workspace.CurrentCamera
+	if not cam or shakeAmt <= 0 then return end
+	local off = Vector3.new(
+		(math.random()*2-1) * shakeAmt,
+		(math.random()*2-1) * shakeAmt,
+		(math.random()*2-1) * shakeAmt
+	)
+	cam.CFrame = cam.CFrame * CFrame.new(off * 0.05)
+	shakeAmt = math.max(0, shakeAmt - shakeDecay * dt)
+end)
+
+local function shake(amount)
+	shakeAmt = math.max(shakeAmt, amount)
+end
+
+-- Shake when local player takes damage
+local lastHP
+local function onCharacter(char)
+	local hum = char:WaitForChild("Humanoid")
+	lastHP = hum.Health
+	hum.HealthChanged:Connect(function(hp)
+		if lastHP and hp < lastHP then
+			shake(0.6)
+		end
+		lastHP = hp
+	end)
+end
+if player.Character then onCharacter(player.Character) end
+player.CharacterAdded:Connect(onCharacter)
+
+Remotes.CrashEffect.OnClientEvent:Connect(function() shake(2.0) end)
+
+]==]
+
+sources.PlayerTagsClient = [==[
+-- PlayerTagsClient.lua
+-- Place in: StarterPlayerScripts as LocalScript named "PlayerTagsClient"
+-- Renders a "שיא: M:SS" BillboardGui above each player's head, including the
+-- local player. Listens to UpdateBestTimes for live updates.
+
+local Players          = game:GetService("Players")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+
+local Strings = require(ReplicatedStorage:WaitForChild("Strings"))
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+
+local TAG_NAME = "BestTimeTag"
+
+local bestTimes = {}  -- [userId] = seconds
+
+local function fmtTime(sec)
+	sec = math.max(0, math.floor(sec or 0))
+	return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
+end
+
+local function formatTagText(seconds)
+	if not seconds or seconds <= 0 then
+		return Strings.BestTime.Tag .. ": " .. Strings.BestTime.None
+	end
+	return Strings.BestTime.Tag .. ": " .. fmtTime(seconds)
+end
+
+local function buildTag(character)
+	local head = character:FindFirstChild("Head")
+	if not head then return nil end
+	local existing = head:FindFirstChild(TAG_NAME)
+	if existing then return existing end
+
+	local bb = Instance.new("BillboardGui")
+	bb.Name = TAG_NAME
+	bb.Adornee = head
+	bb.Size = UDim2.new(0, 180, 0, 36)
+	bb.StudsOffset = Vector3.new(0, 3, 0)
+	bb.AlwaysOnTop = true
+	bb.LightInfluence = 0
+	bb.MaxDistance = 120
+	bb.Parent = head
+
+	local frame = Instance.new("Frame", bb)
+	frame.Size = UDim2.new(1, 0, 1, 0)
+	frame.BackgroundColor3 = Color3.fromRGB(28, 32, 40)
+	frame.BackgroundTransparency = 0.25
+	frame.BorderSizePixel = 0
+	local c = Instance.new("UICorner", frame); c.CornerRadius = UDim.new(0, 8)
+	local s = Instance.new("UIStroke", frame); s.Color = Color3.fromRGB(120, 200, 255); s.Thickness = 1.5
+
+	local label = Instance.new("TextLabel", frame)
+	label.Name = "Label"
+	label.BackgroundTransparency = 1
+	label.Size = UDim2.new(1, -8, 1, 0)
+	label.Position = UDim2.new(0, 4, 0, 0)
+	label.Font = Enum.Font.GothamBold
+	label.TextColor3 = Color3.fromRGB(180, 220, 255)
+	label.TextStrokeTransparency = 0
+	label.TextScaled = true
+	label.Text = formatTagText(0)
+	return bb
+end
+
+local function refreshTagFor(player)
+	local char = player.Character
+	if not char then return end
+	local bb = buildTag(char)
+	if not bb then return end
+	local frame = bb:FindFirstChildWhichIsA("Frame")
+	if not frame then return end
+	local label = frame:FindFirstChild("Label")
+	if not label then return end
+	label.Text = formatTagText(bestTimes[player.UserId])
+end
+
+local function refreshAll()
+	for _, p in ipairs(Players:GetPlayers()) do
+		refreshTagFor(p)
+	end
+end
+
+local function attachToCharacter(player)
+	local char = player.Character
+	if not char then return end
+	-- Wait for head, then build the tag once.
+	task.spawn(function()
+		local head = char:WaitForChild("Head", 5)
+		if head then
+			refreshTagFor(player)
+		end
+	end)
+end
+
+-- Hook player events
+local function onPlayer(p)
+	if p.Character then attachToCharacter(p) end
+	p.CharacterAdded:Connect(function() attachToCharacter(p) end)
+end
+for _, p in ipairs(Players:GetPlayers()) do onPlayer(p) end
+Players.PlayerAdded:Connect(onPlayer)
+
+-- Listen for live updates
+Remotes.UpdateBestTimes.OnClientEvent:Connect(function(payload)
+	if type(payload) ~= "table" then return end
+	for k, v in pairs(payload) do
+		bestTimes[tonumber(k) or k] = v
+	end
+	refreshAll()
+end)
+
+-- Initial fetch
+task.spawn(function()
+	local ok, snapshot = pcall(function()
+		return Remotes.GetBestTimes:InvokeServer()
+	end)
+	if ok and type(snapshot) == "table" then
+		for k, v in pairs(snapshot) do
+			bestTimes[tonumber(k) or k] = v
+		end
+		refreshAll()
+	end
+end)
+
+]==]
+
 sources.DevPanelGui = [==[
 -- DevPanelGui.lua
--- Place in: StarterGui as LocalScript named "DevPanelGui"
+-- Place in: StarterPlayerScripts as LocalScript named "DevPanelGui"
+-- (Lives in StarterPlayerScripts rather than StarterGui so the script
+-- isn't reset on character respawn — that previously caused a stale
+-- ScreenGui to remain stacked under a fresh one after a heal-revive.)
 -- Creator/Dev Panel for game owners. Mirrors the HTML mockup: global
 -- message broadcaster, give XP/weapon/heal (self or other), ban/kick,
--- restart server/all. Only visible to authorized UserIds (server checks
--- IsAdmin RemoteFunction; the panel is also gated by the same check on
--- every action so a tampered client can't bypass it).
+-- restart server/all, spawn animal. Only visible to authorized UserIds.
 
 local Players          = game:GetService("Players")
 local ReplicatedStorage= game:GetService("ReplicatedStorage")
@@ -5331,6 +5721,15 @@ local WeaponConfig = require(ReplicatedStorage:WaitForChild("WeaponConfig"))
 local player    = Players.LocalPlayer
 local pg        = player:WaitForChild("PlayerGui")
 local Remotes   = ReplicatedStorage:WaitForChild("Remotes")
+
+-- Defensive cleanup: destroy any pre-existing DevPanel ScreenGui from a
+-- prior install or session so we don't end up with stacked GUIs whose
+-- close handlers no longer work.
+for _, c in ipairs(pg:GetChildren()) do
+	if c:IsA("ScreenGui") and (c.Name == "DevPanelGui" or c.Name == "DevPanel_Screen") then
+		c:Destroy()
+	end
+end
 
 -- ==== Admin check ====
 local isAdmin = false
@@ -5345,7 +5744,7 @@ end
 
 -- ==== ScreenGui ====
 local screen = Instance.new("ScreenGui")
-screen.Name = "DevPanelGui"
+screen.Name = "DevPanel_Screen"
 screen.ResetOnSpawn = false
 screen.IgnoreGuiInset = true
 screen.DisplayOrder = 200
@@ -6177,395 +6576,6 @@ end)
 
 ]==]
 
-sources.ClientCombat = [==[
--- ClientCombat.lua
--- Place in: StarterPlayerScripts as LocalScript named "ClientCombat"
--- Bridges Tool.Activated to RequestAttack, picking the nearest valid animal target.
-
-local Players          = game:GetService("Players")
-local ReplicatedStorage= game:GetService("ReplicatedStorage")
-local UserInputService = game:GetService("UserInputService")
-local Workspace        = game:GetService("Workspace")
-
-local WeaponConfig = require(ReplicatedStorage:WaitForChild("WeaponConfig"))
-
-local player = Players.LocalPlayer
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-
-local lastSendByTool = {}  -- per Tool, last activation time
-
-local function getEquippedTool(char)
-	if not char then return nil end
-	for _, c in ipairs(char:GetChildren()) do
-		if c:IsA("Tool") and c:GetAttribute("WeaponId") then
-			return c
-		end
-	end
-	return nil
-end
-
--- Find the best animal target near the player (front-cone).
-local function findTarget(weapon, char, hrp)
-	local fwd = hrp.CFrame.LookVector
-	local origin = hrp.Position
-	local best, bestScore = nil, math.huge
-	for _, m in ipairs(Workspace:GetDescendants()) do
-		if m:IsA("Model") and m:GetAttribute("AnimalId") then
-			local hum = m:FindFirstChildOfClass("Humanoid")
-			local thrp = m.PrimaryPart or m:FindFirstChild("HumanoidRootPart")
-			if hum and hum.Health > 0 and thrp then
-				local toT = thrp.Position - origin
-				local dist = toT.Magnitude
-				if dist <= weapon.Range + 4 then
-					local dir = toT.Unit
-					local dot = fwd:Dot(dir)
-					-- accept frontal hemisphere; prefer closer + more aligned
-					if dot > 0.2 then
-						local score = dist - dot * 5
-						if score < bestScore then
-							best, bestScore = m, score
-						end
-					end
-				end
-			end
-		end
-	end
-	return best
-end
-
-local function tryAttack(tool)
-	local now = tick()
-	local weaponId = tool:GetAttribute("WeaponId")
-	local weapon = WeaponConfig.ById[weaponId]
-	if not weapon then return end
-	local lastT = lastSendByTool[tool] or 0
-	if now - lastT < weapon.Cooldown then return end
-	local char = player.Character
-	if not char then return end
-	local hrp = char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return end
-	local target = findTarget(weapon, char, hrp)
-	if not target then return end
-	lastSendByTool[tool] = now
-	Remotes.RequestAttack:FireServer({ target = target })
-end
-
-local function bindTool(tool)
-	tool.Activated:Connect(function()
-		tryAttack(tool)
-	end)
-end
-
-local function onCharacter(char)
-	char.ChildAdded:Connect(function(c)
-		if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
-	end)
-	for _, c in ipairs(char:GetChildren()) do
-		if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
-	end
-	local backpack = player:FindFirstChildOfClass("Backpack")
-	if backpack then
-		backpack.ChildAdded:Connect(function(c)
-			if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
-		end)
-		for _, c in ipairs(backpack:GetChildren()) do
-			if c:IsA("Tool") and c:GetAttribute("WeaponId") then bindTool(c) end
-		end
-	end
-end
-
-if player.Character then onCharacter(player.Character) end
-player.CharacterAdded:Connect(onCharacter)
-
-]==]
-
-sources.EffectsClient = [==[
--- EffectsClient.lua
--- Place in: StarterPlayerScripts as LocalScript named "EffectsClient"
--- Floating damage numbers, hit sparks, and animal-death poof.
-
-local Players          = game:GetService("Players")
-local ReplicatedStorage= game:GetService("ReplicatedStorage")
-local TweenService     = game:GetService("TweenService")
-local Debris           = game:GetService("Debris")
-local Workspace        = game:GetService("Workspace")
-
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-
-local function spawnDamageNumber(position, amount, color)
-	local part = Instance.new("Part")
-	part.Anchored = true
-	part.CanCollide = false
-	part.Transparency = 1
-	part.Size = Vector3.new(0.1, 0.1, 0.1)
-	part.Position = position
-	part.Parent = Workspace
-
-	local bb = Instance.new("BillboardGui", part)
-	bb.Size = UDim2.new(0, 80, 0, 32)
-	bb.AlwaysOnTop = true
-	bb.LightInfluence = 0
-	local lbl = Instance.new("TextLabel", bb)
-	lbl.BackgroundTransparency = 1
-	lbl.Size = UDim2.new(1, 0, 1, 0)
-	lbl.Font = Enum.Font.GothamBlack
-	lbl.TextScaled = true
-	lbl.TextColor3 = color or Color3.fromRGB(255, 220, 80)
-	lbl.TextStrokeTransparency = 0
-	lbl.Text = "-" .. tostring(amount)
-
-	-- Float up and fade
-	local up = TweenService:Create(part, TweenInfo.new(0.9, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-		Position = position + Vector3.new(0, 4, 0)
-	})
-	up:Play()
-	task.delay(0.4, function()
-		TweenService:Create(lbl, TweenInfo.new(0.5), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
-	end)
-	Debris:AddItem(part, 1.0)
-end
-
-local function spawnDeathPoof(position, name)
-	local part = Instance.new("Part")
-	part.Anchored = true
-	part.CanCollide = false
-	part.Transparency = 1
-	part.Size = Vector3.new(0.1, 0.1, 0.1)
-	part.Position = position + Vector3.new(0, 3, 0)
-	part.Parent = Workspace
-
-	local bb = Instance.new("BillboardGui", part)
-	bb.Size = UDim2.new(0, 220, 0, 60)
-	bb.AlwaysOnTop = true
-	local lbl = Instance.new("TextLabel", bb)
-	lbl.BackgroundTransparency = 1
-	lbl.Size = UDim2.new(1, 0, 1, 0)
-	lbl.Font = Enum.Font.GothamBlack
-	lbl.TextColor3 = Color3.fromRGB(255, 100, 100)
-	lbl.TextStrokeTransparency = 0
-	lbl.TextScaled = true
-	lbl.Text = (name and name .. " - הוכרע!") or "הוכרע!"
-
-	-- Smoke
-	local smoke = Instance.new("Smoke")
-	smoke.Color = Color3.fromRGB(80, 30, 30)
-	smoke.Size = 4
-	smoke.RiseVelocity = 4
-	smoke.Opacity = 0.5
-	smoke.Parent = part
-
-	TweenService:Create(part, TweenInfo.new(1.2, Enum.EasingStyle.Quad), {
-		Position = position + Vector3.new(0, 8, 0)
-	}):Play()
-	task.delay(0.6, function()
-		TweenService:Create(lbl, TweenInfo.new(0.5), { TextTransparency = 1, TextStrokeTransparency = 1 }):Play()
-	end)
-	Debris:AddItem(part, 2)
-end
-
-Remotes.ShowDamage.OnClientEvent:Connect(function(payload)
-	if not payload then return end
-	spawnDamageNumber(payload.position, payload.amount, payload.color)
-end)
-
-Remotes.AnimalDied.OnClientEvent:Connect(function(payload)
-	if not payload then return end
-	spawnDeathPoof(payload.position, payload.displayName)
-end)
-
-Remotes.CrashEffect.OnClientEvent:Connect(function(payload)
-	if not payload then return end
-	-- big red flash
-	local sg = Instance.new("ScreenGui", Players.LocalPlayer:WaitForChild("PlayerGui"))
-	sg.IgnoreGuiInset = true
-	local f = Instance.new("Frame", sg)
-	f.Size = UDim2.new(1, 0, 1, 0)
-	f.BackgroundColor3 = Color3.fromRGB(220, 60, 30)
-	f.BackgroundTransparency = 0.2
-	f.BorderSizePixel = 0
-	TweenService:Create(f, TweenInfo.new(1.0), { BackgroundTransparency = 1 }):Play()
-	Debris:AddItem(sg, 1.5)
-end)
-
-]==]
-
-sources.CameraClient = [==[
--- CameraClient.lua
--- Place in: StarterPlayerScripts as LocalScript named "CameraClient"
--- Camera shake on damage taken or crash.
-
-local Players          = game:GetService("Players")
-local ReplicatedStorage= game:GetService("ReplicatedStorage")
-local RunService       = game:GetService("RunService")
-
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-local player  = Players.LocalPlayer
-
-local shakeAmt = 0
-local shakeDecay = 5  -- per second
-
-RunService.RenderStepped:Connect(function(dt)
-	local cam = workspace.CurrentCamera
-	if not cam or shakeAmt <= 0 then return end
-	local off = Vector3.new(
-		(math.random()*2-1) * shakeAmt,
-		(math.random()*2-1) * shakeAmt,
-		(math.random()*2-1) * shakeAmt
-	)
-	cam.CFrame = cam.CFrame * CFrame.new(off * 0.05)
-	shakeAmt = math.max(0, shakeAmt - shakeDecay * dt)
-end)
-
-local function shake(amount)
-	shakeAmt = math.max(shakeAmt, amount)
-end
-
--- Shake when local player takes damage
-local lastHP
-local function onCharacter(char)
-	local hum = char:WaitForChild("Humanoid")
-	lastHP = hum.Health
-	hum.HealthChanged:Connect(function(hp)
-		if lastHP and hp < lastHP then
-			shake(0.6)
-		end
-		lastHP = hp
-	end)
-end
-if player.Character then onCharacter(player.Character) end
-player.CharacterAdded:Connect(onCharacter)
-
-Remotes.CrashEffect.OnClientEvent:Connect(function() shake(2.0) end)
-
-]==]
-
-sources.PlayerTagsClient = [==[
--- PlayerTagsClient.lua
--- Place in: StarterPlayerScripts as LocalScript named "PlayerTagsClient"
--- Renders a "שיא: M:SS" BillboardGui above each player's head, including the
--- local player. Listens to UpdateBestTimes for live updates.
-
-local Players          = game:GetService("Players")
-local ReplicatedStorage= game:GetService("ReplicatedStorage")
-
-local Strings = require(ReplicatedStorage:WaitForChild("Strings"))
-local Remotes = ReplicatedStorage:WaitForChild("Remotes")
-
-local TAG_NAME = "BestTimeTag"
-
-local bestTimes = {}  -- [userId] = seconds
-
-local function fmtTime(sec)
-	sec = math.max(0, math.floor(sec or 0))
-	return string.format("%d:%02d", math.floor(sec / 60), sec % 60)
-end
-
-local function formatTagText(seconds)
-	if not seconds or seconds <= 0 then
-		return Strings.BestTime.Tag .. ": " .. Strings.BestTime.None
-	end
-	return Strings.BestTime.Tag .. ": " .. fmtTime(seconds)
-end
-
-local function buildTag(character)
-	local head = character:FindFirstChild("Head")
-	if not head then return nil end
-	local existing = head:FindFirstChild(TAG_NAME)
-	if existing then return existing end
-
-	local bb = Instance.new("BillboardGui")
-	bb.Name = TAG_NAME
-	bb.Adornee = head
-	bb.Size = UDim2.new(0, 180, 0, 36)
-	bb.StudsOffset = Vector3.new(0, 3, 0)
-	bb.AlwaysOnTop = true
-	bb.LightInfluence = 0
-	bb.MaxDistance = 120
-	bb.Parent = head
-
-	local frame = Instance.new("Frame", bb)
-	frame.Size = UDim2.new(1, 0, 1, 0)
-	frame.BackgroundColor3 = Color3.fromRGB(28, 32, 40)
-	frame.BackgroundTransparency = 0.25
-	frame.BorderSizePixel = 0
-	local c = Instance.new("UICorner", frame); c.CornerRadius = UDim.new(0, 8)
-	local s = Instance.new("UIStroke", frame); s.Color = Color3.fromRGB(120, 200, 255); s.Thickness = 1.5
-
-	local label = Instance.new("TextLabel", frame)
-	label.Name = "Label"
-	label.BackgroundTransparency = 1
-	label.Size = UDim2.new(1, -8, 1, 0)
-	label.Position = UDim2.new(0, 4, 0, 0)
-	label.Font = Enum.Font.GothamBold
-	label.TextColor3 = Color3.fromRGB(180, 220, 255)
-	label.TextStrokeTransparency = 0
-	label.TextScaled = true
-	label.Text = formatTagText(0)
-	return bb
-end
-
-local function refreshTagFor(player)
-	local char = player.Character
-	if not char then return end
-	local bb = buildTag(char)
-	if not bb then return end
-	local frame = bb:FindFirstChildWhichIsA("Frame")
-	if not frame then return end
-	local label = frame:FindFirstChild("Label")
-	if not label then return end
-	label.Text = formatTagText(bestTimes[player.UserId])
-end
-
-local function refreshAll()
-	for _, p in ipairs(Players:GetPlayers()) do
-		refreshTagFor(p)
-	end
-end
-
-local function attachToCharacter(player)
-	local char = player.Character
-	if not char then return end
-	-- Wait for head, then build the tag once.
-	task.spawn(function()
-		local head = char:WaitForChild("Head", 5)
-		if head then
-			refreshTagFor(player)
-		end
-	end)
-end
-
--- Hook player events
-local function onPlayer(p)
-	if p.Character then attachToCharacter(p) end
-	p.CharacterAdded:Connect(function() attachToCharacter(p) end)
-end
-for _, p in ipairs(Players:GetPlayers()) do onPlayer(p) end
-Players.PlayerAdded:Connect(onPlayer)
-
--- Listen for live updates
-Remotes.UpdateBestTimes.OnClientEvent:Connect(function(payload)
-	if type(payload) ~= "table" then return end
-	for k, v in pairs(payload) do
-		bestTimes[tonumber(k) or k] = v
-	end
-	refreshAll()
-end)
-
--- Initial fetch
-task.spawn(function()
-	local ok, snapshot = pcall(function()
-		return Remotes.GetBestTimes:InvokeServer()
-	end)
-	if ok and type(snapshot) == "table" then
-		for k, v in pairs(snapshot) do
-			bestTimes[tonumber(k) or k] = v
-		end
-		refreshAll()
-	end
-end)
-
-]==]
-
 
 local installed = {}
 local function track(parent, name, className, src)
@@ -6595,12 +6605,18 @@ track(StarterGui, "LobbyGui",        "LocalScript", sources.LobbyGui)
 track(StarterGui, "ShopGui",         "LocalScript", sources.ShopGui)
 track(StarterGui, "DeathGui",        "LocalScript", sources.DeathGui)
 track(StarterGui, "NotificationGui", "LocalScript", sources.NotificationGui)
-track(StarterGui, "DevPanelGui",     "LocalScript", sources.DevPanelGui)
+
+-- Important: DevPanelGui lives in StarterPlayerScripts (not StarterGui)
+-- so it isn't reset on character respawn. Also clean up any stale copy
+-- that may have been left in StarterGui by a previous installer version.
+local oldDev = StarterGui:FindFirstChild("DevPanelGui")
+if oldDev then oldDev:Destroy() end
 
 track(StarterPlayerScripts, "ClientCombat",     "LocalScript", sources.ClientCombat)
 track(StarterPlayerScripts, "EffectsClient",    "LocalScript", sources.EffectsClient)
 track(StarterPlayerScripts, "CameraClient",     "LocalScript", sources.CameraClient)
 track(StarterPlayerScripts, "PlayerTagsClient", "LocalScript", sources.PlayerTagsClient)
+track(StarterPlayerScripts, "DevPanelGui",      "LocalScript", sources.DevPanelGui)
 
 local Lighting = game:GetService("Lighting")
 Lighting.ClockTime = 14
@@ -6611,6 +6627,6 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v3.1 installed successfully")
+print("[Install] Island Survival v3.2 installed successfully")
 print(string.format("[Install] %d scripts replaced", #installed))
 print("==============================================================")

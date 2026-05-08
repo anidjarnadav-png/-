@@ -1,10 +1,11 @@
 -- DevPanelGui.lua
--- Place in: StarterGui as LocalScript named "DevPanelGui"
+-- Place in: StarterPlayerScripts as LocalScript named "DevPanelGui"
+-- (Lives in StarterPlayerScripts rather than StarterGui so the script
+-- isn't reset on character respawn — that previously caused a stale
+-- ScreenGui to remain stacked under a fresh one after a heal-revive.)
 -- Creator/Dev Panel for game owners. Mirrors the HTML mockup: global
 -- message broadcaster, give XP/weapon/heal (self or other), ban/kick,
--- restart server/all. Only visible to authorized UserIds (server checks
--- IsAdmin RemoteFunction; the panel is also gated by the same check on
--- every action so a tampered client can't bypass it).
+-- restart server/all, spawn animal. Only visible to authorized UserIds.
 
 local Players          = game:GetService("Players")
 local ReplicatedStorage= game:GetService("ReplicatedStorage")
@@ -17,6 +18,15 @@ local WeaponConfig = require(ReplicatedStorage:WaitForChild("WeaponConfig"))
 local player    = Players.LocalPlayer
 local pg        = player:WaitForChild("PlayerGui")
 local Remotes   = ReplicatedStorage:WaitForChild("Remotes")
+
+-- Defensive cleanup: destroy any pre-existing DevPanel ScreenGui from a
+-- prior install or session so we don't end up with stacked GUIs whose
+-- close handlers no longer work.
+for _, c in ipairs(pg:GetChildren()) do
+	if c:IsA("ScreenGui") and (c.Name == "DevPanelGui" or c.Name == "DevPanel_Screen") then
+		c:Destroy()
+	end
+end
 
 -- ==== Admin check ====
 local isAdmin = false
@@ -31,7 +41,7 @@ end
 
 -- ==== ScreenGui ====
 local screen = Instance.new("ScreenGui")
-screen.Name = "DevPanelGui"
+screen.Name = "DevPanel_Screen"
 screen.ResetOnSpawn = false
 screen.IgnoreGuiInset = true
 screen.DisplayOrder = 200
