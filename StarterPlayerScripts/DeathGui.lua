@@ -29,7 +29,8 @@ local screen = Instance.new("ScreenGui")
 screen.Name = "DeathGui_Screen"
 screen.ResetOnSpawn = false
 screen.IgnoreGuiInset = true
-screen.DisplayOrder = 50
+-- Very high DisplayOrder so a custom shop or other ScreenGui can't cover us.
+screen.DisplayOrder = 1000
 screen.Parent = pg
 
 local function corner(p, r)
@@ -351,3 +352,35 @@ Remotes.UpdateHUD.OnClientEvent:Connect(function(state)
 		hideDeath()
 	end
 end)
+
+-- Client-side fallback: if the player's character dies and the server's
+-- PlayerDied event doesn't reach us (or arrives delayed), we still pop the
+-- GUI so the player isn't left in spectator limbo with no UI.
+local function watchCharacter(char)
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+	if not hum then return end
+	hum.Died:Connect(function()
+		if currentRoundState == "LOBBY" then return end
+		print("[DeathGui] Client-side Humanoid.Died fired; showing GUI")
+		-- Force-show with neutral defaults; the server's PlayerDied
+		-- event (if it arrives later) will overwrite the texts.
+		currentRoundState = "PLAYING"
+		killedBy.Text = string.format(Strings.Death.KilledBy, "סכנה")
+		survivedValue.Text = fmtTime(0)
+		bestValue.Text     = fmtTime(0)
+		recordBadge.Visible = false
+		reviveBtn.Visible = true
+		reviveBtn.Text = Strings.Death.ReviveBtn
+		countLabel.Text = "15"
+		countSub.Text = string.format(Strings.Death.ReturningInSec, 15) .. " " .. Strings.Death.ReturningSec
+		if not backdrop.Visible then
+			showDeath()
+			startPulse()
+		end
+	end)
+end
+if player.Character then watchCharacter(player.Character) end
+player.CharacterAdded:Connect(watchCharacter)
+
+print("[DeathGui] Initialized in StarterPlayerScripts. DisplayOrder = " .. tostring(screen.DisplayOrder))

@@ -1,5 +1,5 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v3.5 — DeathGui to StarterPlayerScripts)
+-- IslandSurvivalInstaller.lua  (v3.6 — death GUI client fallback)
 -- ====================================================================
 -- NON-DESTRUCTIVE installer. Studio: enable "Allow API Services" ->
 -- View > Command Bar -> paste -> Enter.
@@ -1127,9 +1127,16 @@ end
 
 -- Fired when a player dies during PLAYING.
 function RoundManager.OnPlayerDied(player, killedByName)
-	if RoundManager.State ~= "PLAYING" then return end
+	print(string.format("[RoundManager] OnPlayerDied %s state=%s", player.Name, RoundManager.State))
+	if RoundManager.State ~= "PLAYING" then
+		warn(string.format("[RoundManager] OnPlayerDied dropped — state is %s, expected PLAYING", RoundManager.State))
+		return
+	end
 	local s = dm().GetSession(player)
-	if not s.Alive then return end -- already processed
+	if not s.Alive then
+		warn(string.format("[RoundManager] OnPlayerDied dropped — %s session.Alive already false", player.Name))
+		return
+	end
 	s.Alive = false
 	s.DeathTime = tick()
 
@@ -1139,6 +1146,8 @@ function RoundManager.OnPlayerDied(player, killedByName)
 	local isNewRecord, newBest = dm().UpdateBestTime(player, survived)
 	local bestSeconds = isNewRecord and newBest or prevBest
 
+	print(string.format("[RoundManager] Firing PlayerDied to %s (survived=%d, best=%d, canRevive=%s)",
+		player.Name, survived, bestSeconds, tostring(not s.UsedRevive)))
 	getRemotes().PlayerDied:FireClient(player, {
 		killedBy        = killedByName or "סכנה",
 		canRevive       = not s.UsedRevive,
@@ -6364,7 +6373,8 @@ local screen = Instance.new("ScreenGui")
 screen.Name = "DeathGui_Screen"
 screen.ResetOnSpawn = false
 screen.IgnoreGuiInset = true
-screen.DisplayOrder = 50
+-- Very high DisplayOrder so a custom shop or other ScreenGui can't cover us.
+screen.DisplayOrder = 1000
 screen.Parent = pg
 
 local function corner(p, r)
@@ -6687,6 +6697,38 @@ Remotes.UpdateHUD.OnClientEvent:Connect(function(state)
 	end
 end)
 
+-- Client-side fallback: if the player's character dies and the server's
+-- PlayerDied event doesn't reach us (or arrives delayed), we still pop the
+-- GUI so the player isn't left in spectator limbo with no UI.
+local function watchCharacter(char)
+	if not char then return end
+	local hum = char:FindFirstChildOfClass("Humanoid") or char:WaitForChild("Humanoid", 5)
+	if not hum then return end
+	hum.Died:Connect(function()
+		if currentRoundState == "LOBBY" then return end
+		print("[DeathGui] Client-side Humanoid.Died fired; showing GUI")
+		-- Force-show with neutral defaults; the server's PlayerDied
+		-- event (if it arrives later) will overwrite the texts.
+		currentRoundState = "PLAYING"
+		killedBy.Text = string.format(Strings.Death.KilledBy, "סכנה")
+		survivedValue.Text = fmtTime(0)
+		bestValue.Text     = fmtTime(0)
+		recordBadge.Visible = false
+		reviveBtn.Visible = true
+		reviveBtn.Text = Strings.Death.ReviveBtn
+		countLabel.Text = "15"
+		countSub.Text = string.format(Strings.Death.ReturningInSec, 15) .. " " .. Strings.Death.ReturningSec
+		if not backdrop.Visible then
+			showDeath()
+			startPulse()
+		end
+	end)
+end
+if player.Character then watchCharacter(player.Character) end
+player.CharacterAdded:Connect(watchCharacter)
+
+print("[DeathGui] Initialized in StarterPlayerScripts. DisplayOrder = " .. tostring(screen.DisplayOrder))
+
 ]==]
 
 
@@ -6718,7 +6760,6 @@ track(StarterGui, "LobbyGui",        "LocalScript", sources.LobbyGui)
 track(StarterGui, "ShopGui",         "LocalScript", sources.ShopGui)
 track(StarterGui, "NotificationGui", "LocalScript", sources.NotificationGui)
 
--- Stale copies from earlier installer versions:
 for _, name in ipairs({ "DevPanelGui", "DeathGui" }) do
 	local old = StarterGui:FindFirstChild(name)
 	if old then old:Destroy() end
@@ -6740,6 +6781,7 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v3.5 installed successfully")
+print("[Install] Island Survival v3.6 installed successfully")
 print(string.format("[Install] %d scripts replaced", #installed))
+print("[Install] IMPORTANT: stop the game (Stop button) and Play again so the new code runs.")
 print("==============================================================")

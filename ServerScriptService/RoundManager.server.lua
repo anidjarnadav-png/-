@@ -97,9 +97,16 @@ end
 
 -- Fired when a player dies during PLAYING.
 function RoundManager.OnPlayerDied(player, killedByName)
-	if RoundManager.State ~= "PLAYING" then return end
+	print(string.format("[RoundManager] OnPlayerDied %s state=%s", player.Name, RoundManager.State))
+	if RoundManager.State ~= "PLAYING" then
+		warn(string.format("[RoundManager] OnPlayerDied dropped — state is %s, expected PLAYING", RoundManager.State))
+		return
+	end
 	local s = dm().GetSession(player)
-	if not s.Alive then return end -- already processed
+	if not s.Alive then
+		warn(string.format("[RoundManager] OnPlayerDied dropped — %s session.Alive already false", player.Name))
+		return
+	end
 	s.Alive = false
 	s.DeathTime = tick()
 
@@ -109,6 +116,8 @@ function RoundManager.OnPlayerDied(player, killedByName)
 	local isNewRecord, newBest = dm().UpdateBestTime(player, survived)
 	local bestSeconds = isNewRecord and newBest or prevBest
 
+	print(string.format("[RoundManager] Firing PlayerDied to %s (survived=%d, best=%d, canRevive=%s)",
+		player.Name, survived, bestSeconds, tostring(not s.UsedRevive)))
 	getRemotes().PlayerDied:FireClient(player, {
 		killedBy        = killedByName or "סכנה",
 		canRevive       = not s.UsedRevive,
