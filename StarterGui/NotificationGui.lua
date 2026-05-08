@@ -66,3 +66,20 @@ Remotes.ToastNotify.OnClientEvent:Connect(function(payload)
 	if not payload or not payload.text then return end
 	pop(payload.text, payload.color)
 end)
+
+-- Global message banner (sent by the dev panel via AdminManager).
+local globalMsg = Remotes:FindFirstChild("GlobalMessage")
+if globalMsg then
+	globalMsg.OnClientEvent:Connect(function(payload)
+		if not payload or not payload.text then return end
+		local color = Color3.fromRGB(255, 255, 255)
+		local hex = tostring(payload.color or "#ffffff"):gsub("#", "")
+		if #hex == 6 then
+			local r = tonumber(hex:sub(1, 2), 16) or 255
+			local g = tonumber(hex:sub(3, 4), 16) or 255
+			local b = tonumber(hex:sub(5, 6), 16) or 255
+			color = Color3.fromRGB(r, g, b)
+		end
+		pop("[הודעת מערכת] " .. payload.text, color)
+	end)
+end

@@ -58,6 +58,12 @@ local function ensureRemotes()
 	ev("DeathCountdown")         -- server -> player { secondsLeft, survivedSeconds, bestSeconds, isNewRecord }
 	fn("GetBestTimes")           -- client <-> server returns table of { [userId]=seconds }
 
+	-- Admin / Dev Panel
+	ev("AdminAction")            -- client -> server { action, data } (server validates admin)
+	ev("AdminResult")            -- server -> player { ok, message, color }
+	ev("GlobalMessage")          -- server -> all clients { text, color }
+	fn("IsAdmin")                -- client -> server returns bool
+
 	return remotes
 end
 
@@ -89,11 +95,12 @@ local ok = waitForAll({
 	"CombatManager",
 	"ShopManager",
 	"ProductHandler",
+	"AdminManager",
 }, 30)
 
 if not ok then
 	warn("[Main] Some managers did not register. Check script load errors.")
-	for _, n in ipairs({"DataManager","RoundManager","LobbyManager","IslandBuilder","PlaneManager","AnimalManager","CombatManager","ShopManager","ProductHandler"}) do
+	for _, n in ipairs({"DataManager","RoundManager","LobbyManager","IslandBuilder","PlaneManager","AnimalManager","CombatManager","ShopManager","ProductHandler","AdminManager"}) do
 		print("  ", n, _G[n] and "OK" or "MISSING")
 	end
 else
