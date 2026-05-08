@@ -1,7 +1,10 @@
 -- DeathGui.lua
--- Place in: StarterGui as LocalScript named "DeathGui"
--- Dramatic death overlay: 15-second countdown, revive button, survived stats,
--- personal best display.
+-- Place in: StarterPlayerScripts as LocalScript named "DeathGui"
+-- (Lives in StarterPlayerScripts so the script isn't reset on every
+-- respawn. Otherwise the LocalScript dies after the first death, its
+-- event handlers go with it, and on the *next* death no GUI appears.)
+-- Dramatic death overlay: 15-second countdown, revive button, survived
+-- stats, personal best display.
 
 local Players          = game:GetService("Players")
 local ReplicatedStorage= game:GetService("ReplicatedStorage")
@@ -14,8 +17,16 @@ local player    = Players.LocalPlayer
 local pg        = player:WaitForChild("PlayerGui")
 local Remotes   = ReplicatedStorage:WaitForChild("Remotes")
 
+-- Defensive cleanup: destroy any pre-existing DeathGui ScreenGui (e.g.,
+-- from the prior StarterGui install location).
+for _, c in ipairs(pg:GetChildren()) do
+	if c:IsA("ScreenGui") and (c.Name == "DeathGui" or c.Name == "DeathGui_Screen") then
+		c:Destroy()
+	end
+end
+
 local screen = Instance.new("ScreenGui")
-screen.Name = "DeathGui"
+screen.Name = "DeathGui_Screen"
 screen.ResetOnSpawn = false
 screen.IgnoreGuiInset = true
 screen.DisplayOrder = 50
