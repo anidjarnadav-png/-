@@ -373,8 +373,15 @@ local function watchCharacter(char)
 	hum.Died:Connect(function()
 		if currentRoundState == "LOBBY" then return end
 		print("[DeathGui] Client-side Humanoid.Died fired; showing GUI")
-		-- Force-show with neutral defaults; the server's PlayerDied
-		-- event (if it arrives later) will overwrite the texts.
+		-- Tell the server. If the server already processed the death its
+		-- handler is a no-op (s.Alive=false guards re-entry); if it didn't,
+		-- this nudges OnPlayerDied to run and start the proper countdown.
+		pcall(function()
+			Remotes.ClientReportedDeath:FireServer()
+		end)
+		-- Force-show with neutral defaults; the server's PlayerDied event
+		-- (which usually arrives within ~0.5s) overwrites the texts and
+		-- starts the real countdown via DeathCountdown packets.
 		currentRoundState = "PLAYING"
 		killedBy.Text = string.format(Strings.Death.KilledBy, "סכנה")
 		survivedValue.Text = fmtTime(0)

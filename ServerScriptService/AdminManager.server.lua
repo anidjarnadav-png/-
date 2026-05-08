@@ -232,8 +232,13 @@ actions.heal = function(admin, data)
 				return
 			end
 		end
-		-- Round not playing — just LoadCharacter at lobby spawn.
+		-- Round not playing (or revive failed) — just LoadCharacter. We must
+		-- also resync the session: sess.Alive needs to match reality so the
+		-- next death is processed correctly by RoundManager.OnPlayerDied.
 		target:LoadCharacter()
+		local sess = dm().GetSession(target)
+		sess.Alive = true
+		sess.UsedRevive = false
 		notify(admin, true, string.format("%s הופעל מחדש", target.Name), "#51cf66")
 		return
 	end

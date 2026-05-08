@@ -1,5 +1,5 @@
 -- ====================================================================
--- IslandSurvivalInstaller.lua  (v3.7 — death GUI race fix)
+-- IslandSurvivalInstaller.lua  (v3.8 — death/revive race fixes)
 -- ====================================================================
 -- NON-DESTRUCTIVE installer. Studio: enable "Allow API Services" ->
 -- View > Command Bar -> paste -> Enter. STOP THE GAME AND PLAY AGAIN.
@@ -1493,6 +1493,17 @@ function RoundManager.Start()
 		task.wait(0.2)
 		teleportToLobby(player)
 	end
+
+	-- Client may also notify us if it sees Humanoid.Died but the server
+	-- hasn't processed it (god-mode race, replication oddities, etc.).
+	-- We only act if the character is *actually* dead per the server.
+	getRemotes().ClientReportedDeath.OnServerEvent:Connect(function(player)
+		local char = player.Character
+		local hum  = char and char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health <= 0 then
+			RoundManager.OnPlayerDied(player, "סכנה")
+		end
+	end)
 
 	Players.PlayerAdded:Connect(function(player)
 		player.CharacterAdded:Connect(function(char)
@@ -3469,9 +3480,6 @@ end
 
 function ShopManager.HandlePromptRevive(player)
 	local rm = _G.RoundManager
-	-- Allow during PLAYING (normal case) AND during the brief death window
-	-- before the round formally ends. The new round-end logic keeps state
-	-- as PLAYING while any player has a death countdown active.
 	if not rm or (rm.GetState() ~= "PLAYING" and rm.GetState() ~= "ENDING") then
 		warn("[ShopManager] PromptRevive blocked, state:", rm and rm.GetState() or "nil")
 		return
@@ -3483,8 +3491,12 @@ function ShopManager.HandlePromptRevive(player)
 		})
 		return
 	end
-	-- Don't try to revive an already-alive player.
-	if sess.Alive then return end
+	-- Don't trust sess.Alive alone — it can desync with reality (e.g., dev
+	-- panel heal that LoadCharacter'd without going through RevivePlayer).
+	-- Use the actual Humanoid health: if the character is alive, no revive.
+	local char = player.Character
+	local hum  = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then return end
 	print("[ShopManager] Prompting revive for", player.Name)
 	local ok, err = pcall(function()
 		MarketplaceService:PromptProductPurchase(player, GameConfig.Products.REVIVE)
@@ -3868,8 +3880,13 @@ actions.heal = function(admin, data)
 				return
 			end
 		end
-		-- Round not playing — just LoadCharacter at lobby spawn.
+		-- Round not playing (or revive failed) — just LoadCharacter. We must
+		-- also resync the session: sess.Alive needs to match reality so the
+		-- next death is processed correctly by RoundManager.OnPlayerDied.
 		target:LoadCharacter()
+		local sess = dm().GetSession(target)
+		sess.Alive = true
+		sess.UsedRevive = false
 		notify(admin, true, string.format("%s הופעל מחדש", target.Name), "#51cf66")
 		return
 	end
@@ -4187,6 +4204,7 @@ local function ensureRemotes()
 	-- Best time / personal record
 	ev("UpdateBestTimes")        -- server -> all clients { [userId] = seconds }
 	ev("DeathCountdown")         -- server -> player { secondsLeft, survivedSeconds, bestSeconds, isNewRecord }
+	ev("ClientReportedDeath")    -- client -> server (notice me, server ran into a desync)
 	fn("GetBestTimes")           -- client <-> server returns table of { [userId]=seconds }
 
 	-- Admin / Dev Panel
@@ -6717,8 +6735,15 @@ local function watchCharacter(char)
 	hum.Died:Connect(function()
 		if currentRoundState == "LOBBY" then return end
 		print("[DeathGui] Client-side Humanoid.Died fired; showing GUI")
-		-- Force-show with neutral defaults; the server's PlayerDied
-		-- event (if it arrives later) will overwrite the texts.
+		-- Tell the server. If the server already processed the death its
+		-- handler is a no-op (s.Alive=false guards re-entry); if it didn't,
+		-- this nudges OnPlayerDied to run and start the proper countdown.
+		pcall(function()
+			Remotes.ClientReportedDeath:FireServer()
+		end)
+		-- Force-show with neutral defaults; the server's PlayerDied event
+		-- (which usually arrives within ~0.5s) overwrites the texts and
+		-- starts the real countdown via DeathCountdown packets.
 		currentRoundState = "PLAYING"
 		killedBy.Text = string.format(Strings.Death.KilledBy, "סכנה")
 		survivedValue.Text = fmtTime(0)
@@ -6791,7 +6816,7 @@ pcall(function()
 end)
 
 print("==============================================================")
-print("[Install] Island Survival v3.7 installed successfully")
+print("[Install] Island Survival v3.8 installed successfully")
 print(string.format("[Install] %d scripts replaced", #installed))
 print("[Install] Stop the game and Play again to pick up the new code.")
 print("==============================================================")

@@ -809,9 +809,6 @@ end
 
 function ShopManager.HandlePromptRevive(player)
 	local rm = _G.RoundManager
-	-- Allow during PLAYING (normal case) AND during the brief death window
-	-- before the round formally ends. The new round-end logic keeps state
-	-- as PLAYING while any player has a death countdown active.
 	if not rm or (rm.GetState() ~= "PLAYING" and rm.GetState() ~= "ENDING") then
 		warn("[ShopManager] PromptRevive blocked, state:", rm and rm.GetState() or "nil")
 		return
@@ -823,8 +820,12 @@ function ShopManager.HandlePromptRevive(player)
 		})
 		return
 	end
-	-- Don't try to revive an already-alive player.
-	if sess.Alive then return end
+	-- Don't trust sess.Alive alone — it can desync with reality (e.g., dev
+	-- panel heal that LoadCharacter'd without going through RevivePlayer).
+	-- Use the actual Humanoid health: if the character is alive, no revive.
+	local char = player.Character
+	local hum  = char and char:FindFirstChildOfClass("Humanoid")
+	if hum and hum.Health > 0 then return end
 	print("[ShopManager] Prompting revive for", player.Name)
 	local ok, err = pcall(function()
 		MarketplaceService:PromptProductPurchase(player, GameConfig.Products.REVIVE)

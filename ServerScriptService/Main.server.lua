@@ -56,6 +56,7 @@ local function ensureRemotes()
 	-- Best time / personal record
 	ev("UpdateBestTimes")        -- server -> all clients { [userId] = seconds }
 	ev("DeathCountdown")         -- server -> player { secondsLeft, survivedSeconds, bestSeconds, isNewRecord }
+	ev("ClientReportedDeath")    -- client -> server (notice me, server ran into a desync)
 	fn("GetBestTimes")           -- client <-> server returns table of { [userId]=seconds }
 
 	-- Admin / Dev Panel

@@ -464,6 +464,17 @@ function RoundManager.Start()
 		teleportToLobby(player)
 	end
 
+	-- Client may also notify us if it sees Humanoid.Died but the server
+	-- hasn't processed it (god-mode race, replication oddities, etc.).
+	-- We only act if the character is *actually* dead per the server.
+	getRemotes().ClientReportedDeath.OnServerEvent:Connect(function(player)
+		local char = player.Character
+		local hum  = char and char:FindFirstChildOfClass("Humanoid")
+		if hum and hum.Health <= 0 then
+			RoundManager.OnPlayerDied(player, "סכנה")
+		end
+	end)
+
 	Players.PlayerAdded:Connect(function(player)
 		player.CharacterAdded:Connect(function(char)
 			-- Whoever LoadCharacter'd this character is responsible for
